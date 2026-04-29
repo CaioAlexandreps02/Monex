@@ -165,6 +165,13 @@ export interface InvestmentContribution {
   id: string;
   contributionDate: string;
   amount: number;
+  monthValue?: string;
+  source?: "manual" | "planilha";
+  linkedTransactionId?: string;
+  paymentMethod?: PaymentMethod;
+  accountId?: string;
+  cardId?: string;
+  cardMode?: CardMode;
   notes?: string;
 }
 
@@ -177,6 +184,10 @@ export interface Investment {
   currentManualValue?: number;
   notes?: string;
   monthlyTarget: number;
+  paymentMethod?: PaymentMethod;
+  accountId?: string;
+  cardId?: string;
+  cardMode?: CardMode;
   contributions: InvestmentContribution[];
 }
 
@@ -237,13 +248,17 @@ export interface FixedFlowEntry {
   accountId?: string;
   cardId?: string;
   cardMode?: CardMode;
+  linkedBillGroupId?: string;
+  linkedInvestmentId?: string;
+  syncCardLimit?: boolean;
+  manualAmountMonths?: string[];
   notes?: string;
 }
 
 export interface MonthlyGridRow {
   id: string;
   section: FixedFlowSection;
-  sourceType: "fixed" | "planned_purchase";
+  sourceType: "fixed" | "planned_purchase" | "card_auto_bill";
   sourceId: string;
   title: string;
   categoryId: string;
@@ -252,6 +267,9 @@ export interface MonthlyGridRow {
   accountId?: string;
   cardId?: string;
   cardMode?: CardMode;
+  linkedBillGroupId?: string;
+  linkedInvestmentId?: string;
+  syncCardLimit?: boolean;
   notes?: string;
   amountByMonth: Record<string, number>;
   completedMonths: string[];
