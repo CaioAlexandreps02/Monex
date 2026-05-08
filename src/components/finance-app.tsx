@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import {
   accounts as seedAccounts,
@@ -32,7 +33,6 @@ import {
   getMonthlySummary,
   getMonthlyTrend,
   getMonthTransactions,
-  getPurchasesByColumn,
   getUpcomingInstallments,
   getWeeklySummary,
   monthValueToDate,
@@ -70,7 +70,6 @@ import {
   MobileNavigation,
   NavigationRail,
   Panel,
-  PriorityCard,
   PriorityPill,
   ProgressBar,
   SegmentBarChart,
@@ -94,10 +93,10 @@ type DraftTransaction = {
 
 type PlanningScreen = "purchases" | "reserves" | "investments" | "board";
 type PlanningBoardView = "default" | "weeks" | "months";
-type TransactionsSection = "month" | "fixed";
 type ReportsSection = "cashflow" | "categories" | "payment-methods" | "monthly-trend" | "exports";
 type SettingsSection = "main" | "salary" | "categories" | "accounts" | "security";
 type AccountsSection = "overview" | "recurring" | "debts" | "cards";
+type HomeTab = "grid" | "planning" | "accounts";
 type AccountEntryKind = "bill" | "debt";
 type BillDisplayItem =
   | { source: "manual"; bill: Bill }
@@ -131,6 +130,25 @@ type DraftSalaryMonth = {
   monthValue: string;
   fixedIncomePlanned: string;
 };
+
+const viewPathMap: Record<ViewId, string> = {
+  home: "/",
+  transactions: "/transacoes",
+  history: "/historico",
+  settings: "/configuracoes",
+};
+
+function isHomeTab(value: string | null): value is HomeTab {
+  return value === "grid" || value === "planning" || value === "accounts";
+}
+
+function isPlanningScreen(value: string | null): value is Exclude<PlanningScreen, "board"> {
+  return value === "purchases" || value === "reserves" || value === "investments";
+}
+
+function isAccountsSection(value: string | null): value is AccountsSection {
+  return value === "overview" || value === "recurring" || value === "debts" || value === "cards";
+}
 
 type DraftCard = {
   name: string;
@@ -616,10 +634,20 @@ function mapFixedPaymentMethodToBillPlan(
 }
 
 export function FinanceApp() {
-  const [activeView, setActiveView] = useState<ViewId>("dashboard");
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const activeView: ViewId =
+    pathname === "/transacoes"
+      ? "transactions"
+      : pathname === "/historico"
+        ? "history"
+        : pathname === "/configuracoes"
+          ? "settings"
+          : "home";
+  const [homeTab, setHomeTab] = useState<HomeTab>("grid");
   const [planningScreen, setPlanningScreen] = useState<PlanningScreen>("purchases");
   const [planningBoardView, setPlanningBoardView] = useState<PlanningBoardView>("default");
-  const [transactionsSection, setTransactionsSection] = useState<TransactionsSection>("fixed");
   const [accountsSection, setAccountsSection] = useState<AccountsSection>("overview");
   const [reportsSection, setReportsSection] = useState<ReportsSection>("cashflow");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("main");
@@ -718,6 +746,33 @@ export function FinanceApp() {
   const deferredSearch = useDeferredValue(search);
   const currentMonthlyPlan =
     monthlyPlansByMonth[selectedMonth] ?? createMonthlyPlanForMonth(selectedMonth);
+
+  useEffect(() => {
+    if (activeView !== "home") {
+      return;
+    }
+
+    const homeTabParam = searchParams.get("tab");
+    const planningParam = searchParams.get("planning");
+    const accountsParam = searchParams.get("accounts");
+    const nextHomeTab: HomeTab = isHomeTab(homeTabParam) ? homeTabParam : "grid";
+    const nextPlanningScreen: Exclude<PlanningScreen, "board"> = isPlanningScreen(planningParam)
+      ? planningParam
+      : "purchases";
+    const nextAccountsSection: AccountsSection = isAccountsSection(accountsParam)
+      ? accountsParam
+      : "overview";
+    const nextSelectedCardId = searchParams.get("card");
+    const nextStatementMonth = searchParams.get("statementMonth");
+
+    setHomeTab(nextHomeTab);
+    setPlanningScreen(nextPlanningScreen);
+    setAccountsSection(nextAccountsSection);
+    setSelectedCardDetailId(nextSelectedCardId);
+    if (nextStatementMonth) {
+      setSelectedCardStatementMonth(nextStatementMonth);
+    }
+  }, [activeView, searchParams]);
 
   useEffect(() => {
     try {
@@ -859,7 +914,7 @@ export function FinanceApp() {
   )
     .sort()
     .reverse();
-  const activeViewLabel = navItems.find((item) => item.id === activeView)?.label ?? "Dashboard";
+  const activeViewLabel = navItems.find((item) => item.id === activeView)?.label ?? "Home";
 
   const monthSummary = getMonthlySummary(
     transactions,
@@ -891,7 +946,6 @@ export function FinanceApp() {
   );
   const boardColumns = getBoardColumns();
   const planningBoardColumns = boardColumns.filter((column) => column.id !== "bought");
-  const purchasesByColumn = getPurchasesByColumn(plannedPurchases);
   const planningMonthColumns = Array.from({ length: 4 }, (_, index) => {
     const monthValue = getMonthValueOffset(selectedMonth, index);
     return {
@@ -908,7 +962,6 @@ export function FinanceApp() {
   const urgentPlannedPurchases = plannedPurchases.filter(
     (purchase) => purchase.priority === "Urgente" && purchase.status !== "bought",
   );
-  const activeDebts = debts.filter((debt) => debt.status === "active");
   const monthTransactions = getMonthTransactions(transactions, referenceMonthDate);
   const selectedDraftCard = cards.find((card) => card.id === draftTransaction.cardId) ?? cards[0];
   const activePlannedPurchases = plannedPurchases.filter((purchase) => purchase.status !== "bought");
@@ -1030,11 +1083,6 @@ export function FinanceApp() {
     color: ["#1d63cf", "#58a6ff", "#ff8a65", "#22c55e", "#7c3aed"][index % 5],
   }));
 
-  const planningColumnItems = boardColumns.map((column, index) => ({
-    label: column.label,
-    value: purchasesByColumn[column.id].reduce((sum, purchase) => sum + purchase.estimatedValue, 0),
-    color: ["#ef4444", "#f59e0b", "#0ea5e9", "#8b5cf6", "#64748b", "#10b981"][index],
-  }));
   const salaryCalendarMonths = buildYearMonths(referenceMonthDate.getFullYear());
   const monthlyGridRows = createMonthlyGridRows();
   const fixedMonthEntries = monthlyGridRows.filter((entry) => (entry.amountByMonth[selectedMonth] ?? 0) > 0);
@@ -1440,16 +1488,68 @@ export function FinanceApp() {
     return getLinkedInvestmentEntry(investmentId)?.amountByMonth[monthValue] ?? 0;
   }
 
-  function handleNavigate(viewId: ViewId) {
-    setActiveView(viewId);
-    setIsAlertsPanelOpen(false);
-    if (viewId !== "planning") {
-      setPlanningScreen("purchases");
+  function updateHomeLocation(
+    nextTab: HomeTab,
+    options?: {
+      planning?: Exclude<PlanningScreen, "board">;
+      accounts?: AccountsSection;
+      cardId?: string | null;
+      statementMonth?: string | null;
+    },
+  ) {
+    const params = new URLSearchParams();
+    params.set("tab", nextTab);
+
+    if (nextTab === "planning") {
+      params.set("planning", options?.planning ?? (planningScreen === "board" ? "purchases" : planningScreen));
     }
-    if (viewId !== "bills") {
-      setAccountsSection("overview");
+
+    if (nextTab === "accounts") {
+      params.set("accounts", options?.accounts ?? accountsSection);
+      if (options?.cardId) {
+        params.set("card", options.cardId);
+      }
+      if (options?.statementMonth) {
+        params.set("statementMonth", options.statementMonth);
+      }
+    }
+
+    const nextUrl = params.toString() ? `/?${params.toString()}` : "/";
+
+    setHomeTab(nextTab);
+    if (nextTab === "planning") {
+      setPlanningScreen(options?.planning ?? (planningScreen === "board" ? "purchases" : planningScreen));
+    }
+    if (nextTab === "accounts") {
+      setAccountsSection(options?.accounts ?? accountsSection);
+      setSelectedCardDetailId(options?.cardId ?? null);
+      if (options?.statementMonth) {
+        setSelectedCardStatementMonth(options.statementMonth);
+      }
+    } else {
       setSelectedCardDetailId(null);
     }
+
+    if (pathname === "/" && nextUrl === `/${searchParams.toString() ? `?${searchParams.toString()}` : ""}`) {
+      return;
+    }
+
+    router.push(nextUrl);
+  }
+
+  function handleNavigate(viewId: ViewId) {
+    setIsAlertsPanelOpen(false);
+    if (viewId === "home") {
+      updateHomeLocation("grid");
+      return;
+    }
+
+    setSelectedCardDetailId(null);
+    if (viewId !== "settings") {
+      setPlanningScreen("purchases");
+      setAccountsSection("overview");
+    }
+    router.push(viewPathMap[viewId]);
   }
 
   function handleMonthChange(value: string) {
@@ -2197,10 +2297,11 @@ export function FinanceApp() {
       .map((transaction) => transaction.date.slice(0, 7))
       .sort((left, right) => left.localeCompare(right));
 
-    setActiveView("bills");
-    setAccountsSection("cards");
-    setSelectedCardDetailId(cardId);
-    setSelectedCardStatementMonth(statementMonth ?? cardTransactions.at(-1) ?? selectedMonth);
+    updateHomeLocation("accounts", {
+      accounts: "cards",
+      cardId,
+      statementMonth: statementMonth ?? cardTransactions.at(-1) ?? selectedMonth,
+    });
   }
 
   function closeCardDetails() {
@@ -4075,11 +4176,9 @@ export function FinanceApp() {
           <MobileNavigation activeView={activeView} onNavigate={handleNavigate} />
 
           <main className="pb-24 lg:pb-6">
-            {activeView === "dashboard" && renderDashboard()}
+            {activeView === "home" && renderDashboard()}
             {activeView === "transactions" && renderTransactionsWorkspace()}
-            {activeView === "planning" && renderPlanning()}
-            {activeView === "bills" && renderBills()}
-            {activeView === "reports" && renderReports()}
+            {activeView === "history" && renderReports()}
             {activeView === "settings" && renderSettingsWorkspace()}
           </main>
         </div>
@@ -4088,110 +4187,42 @@ export function FinanceApp() {
   );
 
   function renderDashboard() {
+    const homeTabs: Array<{ id: HomeTab; label: string }> = [
+      { id: "grid", label: "Planilha" },
+      { id: "planning", label: "Planejamento" },
+      { id: "accounts", label: "Contas" },
+    ];
+
     return (
       <div className="space-y-4">
-        <section className="grid gap-4 xl:grid-cols-[1.08fr_0.92fr]">
-          <div className="rounded-[28px] bg-gradient-to-br from-[#1b63cc] via-[#2f86ed] to-[#78b8ff] p-6 text-white shadow-[0_24px_80px_rgba(17,80,170,0.28)]">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <p className="text-sm uppercase tracking-[0.28em] text-white/70">Dashboard</p>
-                <h2 className="mt-3 text-4xl font-semibold tracking-tight">
-                  {formatCurrency(monthSummary.remainingMonth)}
-                </h2>
-              </div>
-              <div className="rounded-2xl border border-white/20 bg-white/10 px-4 py-3 text-sm">
-                <p className="text-white/70">Cobertura do salario fixo</p>
-                <p className="mt-2 text-2xl font-semibold">
-                  {monthSummary.salaryCoverage.toFixed(0)}%
-                </p>
-              </div>
-            </div>
+        <div className="flex flex-wrap items-center gap-2 rounded-[28px] border border-slate-200 bg-white px-4 py-4 shadow-[0_18px_42px_rgba(15,23,42,0.05)]">
+          {homeTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => updateHomeLocation(tab.id)}
+              className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                homeTab === tab.id
+                  ? "bg-slate-900 text-white"
+                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-            <div className="mt-6 grid gap-3 sm:grid-cols-2">
-              <div className="rounded-[24px] border border-white/18 bg-white/10 px-4 py-4 backdrop-blur">
-                <p className="text-xs uppercase tracking-[0.22em] text-white/70">Saldo da semana</p>
-                <p className="mt-2 text-2xl font-semibold">{formatCurrency(weeklySummary.balance)}</p>
-              </div>
-              <div className="rounded-[24px] border border-white/18 bg-white/10 px-4 py-4 backdrop-blur">
-                <p className="text-xs uppercase tracking-[0.22em] text-white/70">Compromissos</p>
-                <p className="mt-2 text-2xl font-semibold">{formatCurrency(weeklySummary.commitments)}</p>
-              </div>
-              <div className="rounded-[24px] border border-white/18 bg-white/10 px-4 py-4 backdrop-blur">
-                <p className="text-xs uppercase tracking-[0.22em] text-white/70">Compras planejadas</p>
-                <p className="mt-2 text-2xl font-semibold">{formatCurrency(weeklySummary.plannedPurchases)}</p>
-              </div>
-              <div className="rounded-[24px] border border-white/18 bg-white/10 px-4 py-4 backdrop-blur">
-                <p className="text-xs uppercase tracking-[0.22em] text-white/70">Renda extra necessaria</p>
-                <p className="mt-2 text-2xl font-semibold">{formatCurrency(monthSummary.extraIncomeNeeded)}</p>
-              </div>
-            </div>
-          </div>
-
-          <Panel title="Gastos por categoria" description="">
-            <div className="grid gap-5 md:grid-cols-[220px_1fr] md:items-center">
-              <CategoryDonut items={categoryBreakdown.slice(0, 5)} />
-              <div className="space-y-3">
-                {categoryBreakdown.slice(0, 5).map((item, index) => (
-                  <LegendRow
-                    key={item.categoryName}
-                    index={index}
-                    label={item.categoryName}
-                    value={item.amount}
-                  />
-                ))}
-              </div>
-            </div>
-          </Panel>
-        </section>
-
-        <section className="grid gap-4 xl:grid-cols-[1.02fr_0.98fr]">
-          <Panel title="Compromissos do mes" description="">
-            <div className="grid gap-3 md:grid-cols-2">
-              {urgentPlannedPurchases.slice(0, 2).map((purchase) => (
-                <PriorityCard
-                  key={purchase.id}
-                  title={purchase.name}
-                  subtitle={purchase.description ?? "Compra planejada"}
-                  amount={purchase.estimatedValue}
-                  progress={purchase.savedAmount / purchase.estimatedValue}
-                  pill={purchase.priority}
-                />
-              ))}
-              {activeDebts.slice(0, 2).map((debt) => (
-                <PriorityCard
-                  key={debt.id}
-                  title={debt.name}
-                  subtitle={`Proxima parcela em ${formatShortDate(debt.nextDueDate)}`}
-                  amount={debt.remainingAmount}
-                  progress={debt.paidAmount / debt.totalAmount}
-                  pill={debt.priority}
-                />
-              ))}
-            </div>
-          </Panel>
-
-          <Panel title="Compras planejadas" description="">
-            <div className="space-y-4">
-              <MiniBarChart items={planningColumnItems} />
-              <div className="grid gap-3 sm:grid-cols-3">
-                <MetricStack label="Ativas" value={String(activePlannedPurchases.length)} />
-                <MetricStack label="Reservado" value={formatCurrency(totalSavedPurchaseValue)} />
-                <MetricStack label="Meta total" value={formatCurrency(totalPlannedPurchaseValue)} />
-              </div>
-            </div>
-          </Panel>
-        </section>
-
-        <section>
-          <Panel title="Entradas x saidas" description="">
-            <TrendBars items={monthlyTrend} />
-          </Panel>
-        </section>
+        {homeTab === "grid"
+          ? renderTransactionsWorkspace()
+          : homeTab === "planning"
+            ? renderPlanning()
+            : renderBills()}
       </div>
     );
   }
 
   function renderTransactionsWorkspace() {
+    const workspaceMode: "fixed" | "month" = activeView === "home" ? "fixed" : "month";
     const fixedSections = fixedSectionOrder.map((section) => ({
       section,
       rows: monthlyGridRows.filter((row) => row.section === section),
@@ -4236,32 +4267,7 @@ export function FinanceApp() {
 
     return (
       <div className="space-y-4">
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => setTransactionsSection("fixed")}
-            className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-              transactionsSection === "fixed"
-                ? "bg-slate-900 text-white"
-                : "bg-white text-slate-600 shadow-[0_12px_28px_rgba(15,23,42,0.08)]"
-            }`}
-          >
-            Valores fixos
-          </button>
-          <button
-            type="button"
-            onClick={() => setTransactionsSection("month")}
-            className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-              transactionsSection === "month"
-                ? "bg-slate-900 text-white"
-                : "bg-white text-slate-600 shadow-[0_12px_28px_rgba(15,23,42,0.08)]"
-            }`}
-          >
-            Transacoes do mes
-          </button>
-        </div>
-
-        {transactionsSection === "fixed" ? (
+        {workspaceMode === "fixed" ? (
           <div className="grid min-w-0 max-w-full gap-4">
             <Panel
               title="Centro operacional em planilha"

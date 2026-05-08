@@ -79,34 +79,22 @@ function createAmountMap(entries: Array<[string, number]>) {
 
 export const navItems: NavItem[] = [
   {
-    id: "dashboard",
-    label: "Dashboard",
-    shortLabel: "Resumo",
-    description: "Visao geral do mes e alertas criticos",
+    id: "home",
+    label: "Home",
+    shortLabel: "Home",
+    description: "Planilha principal, planejamento e contas futuras",
   },
   {
     id: "transactions",
     label: "Transacoes",
-    shortLabel: "Movs",
-    description: "Lancamentos, filtros e cadastro rapido",
+    shortLabel: "Mes",
+    description: "Lancamentos e revisao do mes atual",
   },
   {
-    id: "planning",
-    label: "Planejamento",
-    shortLabel: "Kanban",
-    description: "Compras futuras e prioridades em colunas",
-  },
-  {
-    id: "bills",
-    label: "Contas",
-    shortLabel: "Contas",
-    description: "Contas, recorrencias e dividas no mesmo fluxo",
-  },
-  {
-    id: "reports",
-    label: "Relatorios",
-    shortLabel: "Dados",
-    description: "Categorias, evolucao e comportamento do mes",
+    id: "history",
+    label: "Historico",
+    shortLabel: "Passado",
+    description: "Analise historica de gastos, categorias e tendencias",
   },
   {
     id: "settings",

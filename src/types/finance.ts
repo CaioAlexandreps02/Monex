@@ -1,9 +1,7 @@
 export type ViewId =
-  | "dashboard"
+  | "home"
   | "transactions"
-  | "planning"
-  | "bills"
-  | "reports"
+  | "history"
   | "settings";
 
 export type FinancePriority = "Urgente" | "Alta" | "Média" | "Baixa" | "Adiável";
