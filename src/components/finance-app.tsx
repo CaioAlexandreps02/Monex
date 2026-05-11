@@ -344,6 +344,7 @@ function getDefaultBoardColumnForPurchase(
 
 const initialMonth = referenceDate.slice(0, 7);
 const FINANCE_STORAGE_KEY = "monex-app-state-v1";
+const FINANCE_STORAGE_BACKUP_KEY = "monex-app-state-v1-backup";
 type FinancePersistedState = {
   selectedMonth: string;
   accounts: Account[];
@@ -862,13 +863,23 @@ export function FinanceApp() {
 
   const writeLocalPersistedCache = useCallback(
     (state: Partial<FinancePersistedState>, updatedAt: string | null = new Date().toISOString()) => {
-      window.localStorage.setItem(
-        FINANCE_STORAGE_KEY,
-        JSON.stringify({
-          state,
-          updatedAt,
-        } satisfies FinancePersistedCache),
-      );
+      const nextValue = JSON.stringify({
+        state,
+        updatedAt,
+      } satisfies FinancePersistedCache);
+      const currentValue = window.localStorage.getItem(FINANCE_STORAGE_KEY);
+
+      if (currentValue && currentValue !== nextValue) {
+        window.localStorage.setItem(
+          FINANCE_STORAGE_BACKUP_KEY,
+          JSON.stringify({
+            backupAt: new Date().toISOString(),
+            value: currentValue,
+          }),
+        );
+      }
+
+      window.localStorage.setItem(FINANCE_STORAGE_KEY, nextValue);
     },
     [],
   );
@@ -981,7 +992,11 @@ export function FinanceApp() {
             const remoteTimestamp = remoteUpdatedAt ? Date.parse(remoteUpdatedAt) : Number.NEGATIVE_INFINITY;
             const localTimestamp = localUpdatedAt ? Date.parse(localUpdatedAt) : Number.NEGATIVE_INFINITY;
 
-            if (localState && Number.isFinite(localTimestamp) && localTimestamp > remoteTimestamp) {
+            const shouldPreferLocalState =
+              localState &&
+              (!localUpdatedAt || (Number.isFinite(localTimestamp) && localTimestamp > remoteTimestamp));
+
+            if (shouldPreferLocalState) {
               applyPersistedState(localState);
               const syncResponse = await fetch("/api/app-state", {
                 method: "PUT",
