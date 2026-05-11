@@ -1,10 +1,11 @@
-﻿"use client";
+"use client";
 
 import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import {
   accounts as seedAccounts,
+  bankPresets as seedBankPresets,
   bills as seedBills,
   cards as seedCards,
   categories as seedCategories,
@@ -39,6 +40,7 @@ import {
 } from "@/lib/finance";
 import type {
   Account,
+  BankPreset,
   Bill,
   BoardColumn,
   Card,
@@ -94,9 +96,9 @@ type DraftTransaction = {
 type PlanningScreen = "purchases" | "reserves" | "investments" | "board";
 type PlanningBoardView = "default" | "weeks" | "months";
 type ReportsSection = "cashflow" | "categories" | "payment-methods" | "monthly-trend" | "exports";
-type SettingsSection = "main" | "salary" | "categories" | "accounts" | "security";
-type AccountsSection = "overview" | "recurring" | "debts" | "cards";
-type HomeTab = "grid" | "planning" | "accounts";
+type SettingsSection = "main" | "salary" | "categories" | "banks" | "accounts" | "security";
+type AccountsSection = "overview" | "recurring" | "debts";
+type HomeTab = "grid" | "planning" | "accounts" | "cards";
 type AccountEntryKind = "bill" | "debt";
 type BillDisplayItem =
   | { source: "manual"; bill: Bill }
@@ -139,7 +141,7 @@ const viewPathMap: Record<ViewId, string> = {
 };
 
 function isHomeTab(value: string | null): value is HomeTab {
-  return value === "grid" || value === "planning" || value === "accounts";
+  return value === "grid" || value === "planning" || value === "accounts" || value === "cards";
 }
 
 function isPlanningScreen(value: string | null): value is Exclude<PlanningScreen, "board"> {
@@ -147,7 +149,7 @@ function isPlanningScreen(value: string | null): value is Exclude<PlanningScreen
 }
 
 function isAccountsSection(value: string | null): value is AccountsSection {
-  return value === "overview" || value === "recurring" || value === "debts" || value === "cards";
+  return value === "overview" || value === "recurring" || value === "debts";
 }
 
 type DraftCard = {
@@ -161,6 +163,12 @@ type DraftCard = {
   dueDay: string;
   creditLimit: string;
   linkedAccountId: string;
+};
+
+type DraftBankPreset = {
+  issuer: string;
+  brand: string;
+  color: string;
 };
 
 type DraftBill = {
@@ -190,6 +198,12 @@ type DraftDebt = {
   status: "active" | "paused" | "settled";
   plannedPaymentMethod: PaymentPlanMethod;
   plannedCardId: string;
+};
+
+type DraftDebtPlan = {
+  debtId: string;
+  monthCount: string;
+  installmentAmount: string;
 };
 
 type DraftAccount = {
@@ -240,9 +254,9 @@ type DraftInvestmentContribution = {
 const paymentLabels: Record<PaymentMethod, string> = {
   pix: "Pix",
   cash: "Dinheiro",
-  bank_transfer: "TransferÃªncia",
-  credit_card: "CartÃ£o crÃ©dito",
-  debit_card: "CartÃ£o dÃ©bito",
+  bank_transfer: "Transferencia",
+  credit_card: "Cartao credito",
+  debit_card: "Cartao debito",
 };
 
 const planningBoardViewLabels: Record<PlanningBoardView, string> = {
@@ -263,23 +277,6 @@ const paymentPlanLabels: Record<PaymentPlanMethod, string> = {
   bank_transfer: "Transferencia",
   card: "Cartao",
 };
-
-const bankPresets = [
-  { issuer: "Nubank", color: "#7a2cff", brand: "Mastercard" },
-  { issuer: "C6 Bank", color: "#111111", brand: "Mastercard" },
-  { issuer: "Inter", color: "#ff7a00", brand: "Mastercard" },
-  { issuer: "Will Bank", color: "#f3c400", brand: "Mastercard" },
-  { issuer: "Banco do Brasil", color: "#f6d00f", brand: "Visa" },
-  { issuer: "Caixa", color: "#0a5bd8", brand: "Visa" },
-  { issuer: "Itau", color: "#ff6a00", brand: "Visa" },
-  { issuer: "Bradesco", color: "#c81d4f", brand: "Visa" },
-  { issuer: "Santander", color: "#e02424", brand: "Visa" },
-  { issuer: "PicPay", color: "#19c37d", brand: "Mastercard" },
-];
-
-function getBankPreset(issuer: string) {
-  return bankPresets.find((preset) => preset.issuer === issuer) ?? bankPresets[0];
-}
 
 function getCardGradient(color: string) {
   return {
@@ -347,6 +344,24 @@ function getDefaultBoardColumnForPurchase(
 
 const initialMonth = referenceDate.slice(0, 7);
 const FINANCE_STORAGE_KEY = "monex-app-state-v1";
+type FinancePersistedState = {
+  selectedMonth: string;
+  accounts: Account[];
+  cards: Card[];
+  transactions: Transaction[];
+  bills: Bill[];
+  categories: Category[];
+  debts: Debt[];
+  fixedEntries: FixedFlowEntry[];
+  plannedPurchases: PlannedPurchase[];
+  investments: Investment[];
+  settings: Settings;
+  monthlyPlansByMonth: Record<string, MonthlyPlan>;
+};
+type FinancePersistedCache = {
+  state: Partial<FinancePersistedState>;
+  updatedAt: string | null;
+};
 
 const initialDraftTransaction: DraftTransaction = {
   title: "",
@@ -399,6 +414,12 @@ const initialDraftCard: DraftCard = {
   linkedAccountId: "acc-main",
 };
 
+const initialDraftBankPreset: DraftBankPreset = {
+  issuer: "",
+  brand: "Mastercard",
+  color: "#1d63cf",
+};
+
 const initialDraftBill: DraftBill = {
   title: "",
   amount: "",
@@ -428,12 +449,29 @@ const initialDraftDebt: DraftDebt = {
   plannedCardId: "card-nubank",
 };
 
+const initialDraftDebtPlan: DraftDebtPlan = {
+  debtId: "",
+  monthCount: "1",
+  installmentAmount: "",
+};
+
 const initialDraftAccount: DraftAccount = {
   name: "",
   type: "Conta corrente",
   initialBalance: "0",
   currentBalance: "0",
 };
+
+const hiddenAccountCategoryIds = new Set(["cat-bills", "cat-debt"]);
+const hiddenUiCategoryIds = new Set(["cat-bills", "cat-debt", "cat-invest"]);
+
+function isHiddenAccountCategoryId(categoryId?: string) {
+  return Boolean(categoryId && hiddenAccountCategoryIds.has(categoryId));
+}
+
+function isHiddenUiCategoryId(categoryId?: string) {
+  return Boolean(categoryId && hiddenUiCategoryIds.has(categoryId));
+}
 
 const initialDraftFixedEntry: DraftFixedEntry = {
   section: "Ganhos",
@@ -476,9 +514,9 @@ const initialDraftInvestmentContribution: DraftInvestmentContribution = {
 const planningPriorityOptions: FinancePriority[] = [
   "Urgente",
   "Alta",
-  "MÃ©dia" as FinancePriority,
+  "Media" as FinancePriority,
   "Baixa",
-  "AdiÃ¡vel" as FinancePriority,
+  "Adiavel" as FinancePriority,
 ];
 
 const fixedSectionOrder: FixedFlowSection[] = [
@@ -633,6 +671,39 @@ function mapFixedPaymentMethodToBillPlan(
   };
 }
 
+function buildDebtPlanSchedule(
+  startMonthValue: string,
+  totalAmount: number,
+  monthCount: number,
+  installmentAmount?: number,
+) {
+  const safeMonthCount = Math.max(1, monthCount);
+  const baseAmount = Number(
+    (
+      installmentAmount && installmentAmount > 0
+        ? installmentAmount
+        : totalAmount / safeMonthCount
+    ).toFixed(2),
+  );
+  let remaining = Number(totalAmount.toFixed(2));
+  const schedule = Array.from({ length: safeMonthCount }, (_, index) => {
+    const monthValue = getMonthValueOffset(startMonthValue, index);
+    const amount =
+      index === safeMonthCount - 1 ? remaining : Math.min(baseAmount, remaining);
+    remaining = Number((remaining - amount).toFixed(2));
+
+    return {
+      monthValue,
+      amount: Number(Math.max(0, amount).toFixed(2)),
+    };
+  });
+
+  return {
+    schedule,
+    baseAmount,
+  };
+}
+
 export function FinanceApp() {
   const router = useRouter();
   const pathname = usePathname();
@@ -675,8 +746,10 @@ export function FinanceApp() {
   const [draftTransaction, setDraftTransaction] = useState(initialDraftTransaction);
   const [draftCategory, setDraftCategory] = useState(initialDraftCategory);
   const [draftCard, setDraftCard] = useState(initialDraftCard);
+  const [draftBankPreset, setDraftBankPreset] = useState(initialDraftBankPreset);
   const [draftBill, setDraftBill] = useState(initialDraftBill);
   const [draftDebt, setDraftDebt] = useState(initialDraftDebt);
+  const [draftDebtPlan, setDraftDebtPlan] = useState(initialDraftDebtPlan);
   const [draftAccount, setDraftAccount] = useState(initialDraftAccount);
   const [draftFixedEntry, setDraftFixedEntry] = useState<DraftFixedEntry>(() => ({
     ...initialDraftFixedEntry,
@@ -688,6 +761,7 @@ export function FinanceApp() {
   );
   const [newAccountKind, setNewAccountKind] = useState<AccountEntryKind>("bill");
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
+  const [editingBankIssuer, setEditingBankIssuer] = useState<string | null>(null);
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
   const [editingBillId, setEditingBillId] = useState<string | null>(null);
   const [editingDebtId, setEditingDebtId] = useState<string | null>(null);
@@ -699,6 +773,7 @@ export function FinanceApp() {
   const [isNewAccountModalOpen, setIsNewAccountModalOpen] = useState(false);
   const [isBillModalOpen, setIsBillModalOpen] = useState(false);
   const [isDebtModalOpen, setIsDebtModalOpen] = useState(false);
+  const [isDebtPlanModalOpen, setIsDebtPlanModalOpen] = useState(false);
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [isFixedEntryModalOpen, setIsFixedEntryModalOpen] = useState(false);
   const [isInvestmentModalOpen, setIsInvestmentModalOpen] = useState(false);
@@ -734,18 +809,121 @@ export function FinanceApp() {
   const [draftCardBalanceUsed, setDraftCardBalanceUsed] = useState("");
   const [isAlertsPanelOpen, setIsAlertsPanelOpen] = useState(false);
   const [hasLoadedPersistedState, setHasLoadedPersistedState] = useState(false);
+  const [hasHydratedRemoteState, setHasHydratedRemoteState] = useState(false);
   const [collapsedFixedSections, setCollapsedFixedSections] = useState<Record<FixedFlowSection, boolean>>({
     Ganhos: false,
     "Gastos fixos": false,
     "Dividas e repasses": false,
     "Compras planejadas": false,
   });
+  const [expandedCardBillCells, setExpandedCardBillCells] = useState<Record<string, boolean>>({});
   const [isFixedClosingCollapsed, setIsFixedClosingCollapsed] = useState(true);
   const monthlyGridClickSuppressedUntilRef = useRef(0);
   const referenceMonthDate = monthValueToDate(selectedMonth);
   const deferredSearch = useDeferredValue(search);
   const currentMonthlyPlan =
     monthlyPlansByMonth[selectedMonth] ?? createMonthlyPlanForMonth(selectedMonth);
+  const bankPresets = settings.bankPresets?.length ? settings.bankPresets : seedBankPresets;
+
+  function getBankPreset(issuer: string) {
+    return bankPresets.find((preset) => preset.issuer === issuer) ?? bankPresets[0];
+  }
+
+  const buildPersistedState = useCallback(
+    (): FinancePersistedState => ({
+      selectedMonth,
+      accounts,
+      cards,
+      transactions,
+      bills,
+      categories,
+      debts,
+      fixedEntries,
+      plannedPurchases,
+      investments,
+      settings,
+      monthlyPlansByMonth,
+    }),
+    [
+      selectedMonth,
+      accounts,
+      cards,
+      transactions,
+      bills,
+      categories,
+      debts,
+      fixedEntries,
+      plannedPurchases,
+      investments,
+      settings,
+      monthlyPlansByMonth,
+    ],
+  );
+
+  const writeLocalPersistedCache = useCallback(
+    (state: Partial<FinancePersistedState>, updatedAt: string | null = new Date().toISOString()) => {
+      window.localStorage.setItem(
+        FINANCE_STORAGE_KEY,
+        JSON.stringify({
+          state,
+          updatedAt,
+        } satisfies FinancePersistedCache),
+      );
+    },
+    [],
+  );
+
+  const parseLocalPersistedCache = useCallback((): FinancePersistedCache | null => {
+    try {
+      const raw = window.localStorage.getItem(FINANCE_STORAGE_KEY);
+      if (!raw) {
+        return null;
+      }
+
+      const parsed = JSON.parse(raw) as
+        | FinancePersistedCache
+        | Partial<FinancePersistedState>
+        | null;
+
+      if (!parsed || typeof parsed !== "object") {
+        window.localStorage.removeItem(FINANCE_STORAGE_KEY);
+        return null;
+      }
+
+      if ("state" in parsed && parsed.state && typeof parsed.state === "object") {
+        return {
+          state: parsed.state as Partial<FinancePersistedState>,
+          updatedAt:
+            "updatedAt" in parsed && typeof parsed.updatedAt === "string"
+              ? parsed.updatedAt
+              : null,
+        };
+      }
+
+      return {
+        state: parsed as Partial<FinancePersistedState>,
+        updatedAt: null,
+      };
+    } catch {
+      window.localStorage.removeItem(FINANCE_STORAGE_KEY);
+      return null;
+    }
+  }, []);
+
+  const applyPersistedState = useCallback((persisted: Partial<FinancePersistedState>) => {
+    if (persisted.selectedMonth) setSelectedMonth(persisted.selectedMonth);
+    if (persisted.accounts) setAccounts(persisted.accounts);
+    if (persisted.cards) setCards(persisted.cards);
+    if (persisted.transactions) setTransactions(persisted.transactions);
+    if (persisted.bills) setBills(persisted.bills);
+    if (persisted.categories) setCategories(persisted.categories);
+    if (persisted.debts) setDebts(persisted.debts);
+    if (persisted.fixedEntries) setFixedEntries(persisted.fixedEntries);
+    if (persisted.plannedPurchases) setPlannedPurchases(persisted.plannedPurchases);
+    if (persisted.investments) setInvestments(persisted.investments);
+    if (persisted.settings) setSettings(persisted.settings);
+    if (persisted.monthlyPlansByMonth) setMonthlyPlansByMonth(persisted.monthlyPlansByMonth);
+  }, []);
 
   useEffect(() => {
     if (activeView !== "home") {
@@ -775,84 +953,121 @@ export function FinanceApp() {
   }, [activeView, searchParams]);
 
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(FINANCE_STORAGE_KEY);
-      if (!raw) {
-        setHasLoadedPersistedState(true);
-        return;
+    let isCancelled = false;
+
+    async function hydratePersistedState() {
+      const localCache = parseLocalPersistedCache();
+      const localState = localCache?.state ?? null;
+      const localUpdatedAt = localCache?.updatedAt;
+
+      try {
+        const response = await fetch("/api/app-state", {
+          method: "GET",
+          cache: "no-store",
+        });
+
+        if (isCancelled) {
+          return;
+        }
+
+        if (response.ok) {
+          const payload = (await response.json()) as {
+            state?: Partial<FinancePersistedState> | null;
+            updatedAt?: string | null;
+          };
+
+          if (payload.state) {
+            const remoteUpdatedAt = payload.updatedAt ?? null;
+            const remoteTimestamp = remoteUpdatedAt ? Date.parse(remoteUpdatedAt) : Number.NEGATIVE_INFINITY;
+            const localTimestamp = localUpdatedAt ? Date.parse(localUpdatedAt) : Number.NEGATIVE_INFINITY;
+
+            if (localState && Number.isFinite(localTimestamp) && localTimestamp > remoteTimestamp) {
+              applyPersistedState(localState);
+              const syncResponse = await fetch("/api/app-state", {
+                method: "PUT",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ state: localState }),
+              }).catch(() => null);
+
+              if (syncResponse?.ok) {
+                const syncPayload = (await syncResponse.json()) as { updatedAt?: string | null };
+                writeLocalPersistedCache(localState, syncPayload.updatedAt ?? localUpdatedAt ?? null);
+              } else {
+                writeLocalPersistedCache(localState, localUpdatedAt ?? null);
+              }
+            } else {
+              applyPersistedState(payload.state);
+              writeLocalPersistedCache(payload.state, remoteUpdatedAt);
+            }
+            return;
+          }
+        }
+
+        if (localState) {
+          applyPersistedState(localState);
+          const syncResponse = await fetch("/api/app-state", {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ state: localState }),
+          }).catch(() => undefined);
+
+          if (syncResponse?.ok) {
+            const syncPayload = (await syncResponse.json()) as { updatedAt?: string | null };
+            writeLocalPersistedCache(localState, syncPayload.updatedAt ?? localUpdatedAt ?? null);
+          }
+        }
+      } finally {
+        if (!isCancelled) {
+          setHasLoadedPersistedState(true);
+          setHasHydratedRemoteState(true);
+        }
       }
-
-      const persisted = JSON.parse(raw) as Partial<{
-        selectedMonth: string;
-        accounts: Account[];
-        cards: Card[];
-        transactions: Transaction[];
-        bills: Bill[];
-        categories: Category[];
-        debts: Debt[];
-        fixedEntries: FixedFlowEntry[];
-        plannedPurchases: PlannedPurchase[];
-        investments: Investment[];
-        settings: Settings;
-        monthlyPlansByMonth: Record<string, MonthlyPlan>;
-      }>;
-
-      if (persisted.selectedMonth) setSelectedMonth(persisted.selectedMonth);
-      if (persisted.accounts) setAccounts(persisted.accounts);
-      if (persisted.cards) setCards(persisted.cards);
-      if (persisted.transactions) setTransactions(persisted.transactions);
-      if (persisted.bills) setBills(persisted.bills);
-      if (persisted.categories) setCategories(persisted.categories);
-      if (persisted.debts) setDebts(persisted.debts);
-      if (persisted.fixedEntries) setFixedEntries(persisted.fixedEntries);
-      if (persisted.plannedPurchases) setPlannedPurchases(persisted.plannedPurchases);
-      if (persisted.investments) setInvestments(persisted.investments);
-      if (persisted.settings) setSettings(persisted.settings);
-      if (persisted.monthlyPlansByMonth) setMonthlyPlansByMonth(persisted.monthlyPlansByMonth);
-    } catch {
-      window.localStorage.removeItem(FINANCE_STORAGE_KEY);
-    } finally {
-      setHasLoadedPersistedState(true);
     }
-  }, []);
+
+    hydratePersistedState();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [applyPersistedState, parseLocalPersistedCache, writeLocalPersistedCache]);
 
   useEffect(() => {
     if (!hasLoadedPersistedState) {
       return;
     }
 
-    window.localStorage.setItem(
-      FINANCE_STORAGE_KEY,
-      JSON.stringify({
-        selectedMonth,
-        accounts,
-        cards,
-        transactions,
-        bills,
-        categories,
-        debts,
-        fixedEntries,
-        plannedPurchases,
-        investments,
-        settings,
-        monthlyPlansByMonth,
-      }),
-    );
-  }, [
-    hasLoadedPersistedState,
-    selectedMonth,
-    accounts,
-    cards,
-    transactions,
-    bills,
-    categories,
-    debts,
-    fixedEntries,
-    plannedPurchases,
-    investments,
-    settings,
-    monthlyPlansByMonth,
-  ]);
+    const snapshot = buildPersistedState();
+    writeLocalPersistedCache(snapshot);
+
+    if (!hasHydratedRemoteState) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      fetch("/api/app-state", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ state: snapshot }),
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            return;
+          }
+
+          const payload = (await response.json()) as { updatedAt?: string | null };
+          writeLocalPersistedCache(snapshot, payload.updatedAt ?? null);
+        })
+        .catch(() => undefined);
+    }, 500);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [buildPersistedState, hasHydratedRemoteState, hasLoadedPersistedState, writeLocalPersistedCache]);
 
   const autoCardBills = cards
     .filter((card) => card.availableMode !== "debit")
@@ -905,10 +1120,34 @@ export function FinanceApp() {
     ...bills.filter((bill) => !isCreditLinkedBill(bill)),
     ...autoCardBills.map((item) => item.bill),
   ];
+  const manualBillsForDisplay: BillDisplayItem[] = Array.from(
+    bills.reduce((groups, bill) => {
+      const groupKey = bill.isRecurring ? bill.recurringGroupId ?? bill.id : bill.id;
+      const currentGroup = groups.get(groupKey) ?? [];
+      currentGroup.push(bill);
+      groups.set(groupKey, currentGroup);
+      return groups;
+    }, new Map<string, Bill[]>()),
+  ).map(([, groupBills]) => {
+    const sortedBills = [...groupBills].sort((left, right) => left.dueDate.localeCompare(right.dueDate));
+    const preferredBill =
+      sortedBills.find((bill) => bill.dueDate.slice(0, 7) === selectedMonth) ??
+      sortedBills.find((bill) => bill.dueDate.slice(0, 7) >= selectedMonth) ??
+      sortedBills[0];
+
+    return { source: "manual" as const, bill: preferredBill };
+  });
   const billsForDisplay: BillDisplayItem[] = [
     ...autoCardBills,
-    ...bills.map((bill) => ({ source: "manual" as const, bill })),
+    ...manualBillsForDisplay,
   ].sort((left, right) => left.bill.dueDate.localeCompare(right.bill.dueDate));
+  const selectableBillCategories = categories.filter(
+    (category) => category.type === "expense" && !isHiddenUiCategoryId(category.id),
+  );
+  const defaultBillCategoryId =
+    selectableBillCategories[0]?.id ??
+    categories.find((category) => category.type === "expense")?.id ??
+    initialDraftBill.categoryId;
   const availableAnalysisMonths = Array.from(
     new Set([selectedMonth, ...getAvailableMonths(transactions, allBills)]),
   )
@@ -959,9 +1198,6 @@ export function FinanceApp() {
   }));
   const accountsSnapshot = getAccountsSnapshot(transactions, accounts);
   const investmentSnapshot = getInvestmentSnapshot(investments);
-  const urgentPlannedPurchases = plannedPurchases.filter(
-    (purchase) => purchase.priority === "Urgente" && purchase.status !== "bought",
-  );
   const monthTransactions = getMonthTransactions(transactions, referenceMonthDate);
   const selectedDraftCard = cards.find((card) => card.id === draftTransaction.cardId) ?? cards[0];
   const activePlannedPurchases = plannedPurchases.filter((purchase) => purchase.status !== "bought");
@@ -1124,35 +1360,23 @@ export function FinanceApp() {
     })
     .reduce((sum, entry) => sum + (entry.amountByMonth[selectedMonth] ?? 0), 0);
 
-  const billStatusItems = [
-    {
-      label: "Pendentes",
-      value: allBills.filter((bill) => bill.status === "pending").reduce((sum, bill) => sum + bill.amount, 0),
-      color: "#f59e0b",
-    },
-    {
-      label: "Atrasadas",
-      value: allBills.filter((bill) => bill.status === "overdue").reduce((sum, bill) => sum + bill.amount, 0),
-      color: "#ef4444",
-    },
-    {
-      label: "Pagas",
-      value: allBills.filter((bill) => bill.status === "paid").reduce((sum, bill) => sum + bill.amount, 0),
-      color: "#10b981",
-    },
-  ];
-
   const selectedCardDetail = cards.find((card) => card.id === selectedCardDetailId) ?? null;
   const selectedCardStatementMonths = selectedCardDetail
     ? Array.from(
         new Set(
-          transactions
-            .filter(
-              (transaction) =>
-                transaction.cardId === selectedCardDetail.id && transaction.cardMode === "credit",
-            )
-            .map((transaction) => transaction.date.slice(0, 7))
-            .concat(selectedMonth),
+          [
+            getMonthValueOffset(selectedCardStatementMonth, -1),
+            selectedCardStatementMonth,
+            getMonthValueOffset(selectedCardStatementMonth, 1),
+            getMonthValueOffset(selectedCardStatementMonth, 2),
+            getMonthValueOffset(selectedCardStatementMonth, 3),
+            ...transactions
+              .filter(
+                (transaction) =>
+                  transaction.cardId === selectedCardDetail.id && transaction.cardMode === "credit",
+              )
+              .map((transaction) => transaction.date.slice(0, 7)),
+          ],
         ),
       ).sort((left, right) => left.localeCompare(right))
     : [];
@@ -1188,6 +1412,14 @@ export function FinanceApp() {
           item.statementMonth === selectedCardStatementMonth,
       )
     : undefined;
+  const selectedCardFixedItems = selectedCardDetail
+    ? fixedEntries.filter(
+        (entry) =>
+          entry.paymentMethod === "credit_card" &&
+          entry.cardId === selectedCardDetail.id &&
+          (entry.amountByMonth[selectedCardStatementMonth] ?? 0) > 0,
+      )
+    : [];
   const selectedCardStatementDueLabel = selectedCardStatementAutoBill
     ? formatShortDate(selectedCardStatementAutoBill.bill.dueDate)
     : null;
@@ -1389,6 +1621,59 @@ export function FinanceApp() {
     });
   }, [hasLoadedPersistedState, investments, categories, salaryCalendarMonths, settings.defaultAccountId]);
 
+  useEffect(() => {
+    if (!hasLoadedPersistedState) {
+      return;
+    }
+
+    setFixedEntries((currentEntries) => {
+      const debtCategory =
+        categories.find((item) => item.id === "cat-debt") ??
+        categories.find((item) => item.name === "Dividas") ??
+        categories.find((item) => item.type === "expense") ??
+        categories[0];
+      const nextEntries = currentEntries.map((entry) => {
+        if (!entry.linkedDebtId) {
+          return entry;
+        }
+
+        const linkedDebt = debts.find((debt) => debt.id === entry.linkedDebtId);
+        if (!linkedDebt) {
+          return entry;
+        }
+
+        const paymentDetails = getPlannedPaymentDetails(
+          linkedDebt.plannedPaymentMethod,
+          linkedDebt.plannedCardId,
+          "credit",
+          cards,
+        );
+
+        return {
+          ...entry,
+          section: "Dividas e repasses" as FixedFlowSection,
+          title: linkedDebt.name,
+          categoryId: debtCategory?.id ?? entry.categoryId,
+          categoryName: debtCategory?.name ?? entry.categoryName,
+          paymentMethod: paymentDetails.transactionMethod,
+          accountId: entry.accountId ?? settings.defaultAccountId,
+          cardId: paymentDetails.cardId,
+          cardMode: paymentDetails.cardMode,
+          notes: linkedDebt.description ?? entry.notes,
+        };
+      });
+
+      const debtIds = new Set(debts.map((debt) => debt.id));
+      const filteredEntries = nextEntries.filter(
+        (entry) => !entry.linkedDebtId || debtIds.has(entry.linkedDebtId),
+      );
+
+      return JSON.stringify(filteredEntries) === JSON.stringify(currentEntries)
+        ? currentEntries
+        : filteredEntries;
+    });
+  }, [hasLoadedPersistedState, debts, categories, cards, settings.defaultAccountId]);
+
   function rebuildTransactionsForBills(currentTransactions: Transaction[], nextBillsGroup: Bill[]) {
     const billIds = new Set(nextBillsGroup.map((bill) => bill.id));
     const cleanedTransactions = currentTransactions.filter(
@@ -1506,6 +1791,9 @@ export function FinanceApp() {
 
     if (nextTab === "accounts") {
       params.set("accounts", options?.accounts ?? accountsSection);
+    }
+
+    if (nextTab === "cards") {
       if (options?.cardId) {
         params.set("card", options.cardId);
       }
@@ -1522,6 +1810,8 @@ export function FinanceApp() {
     }
     if (nextTab === "accounts") {
       setAccountsSection(options?.accounts ?? accountsSection);
+    }
+    if (nextTab === "cards") {
       setSelectedCardDetailId(options?.cardId ?? null);
       if (options?.statementMonth) {
         setSelectedCardStatementMonth(options.statementMonth);
@@ -1908,6 +2198,13 @@ export function FinanceApp() {
     );
   }
 
+  function handleDeletePurchase(purchaseId: string) {
+    setPlannedPurchases((current) => current.filter((purchase) => purchase.id !== purchaseId));
+    if (editingPurchaseId === purchaseId) {
+      closePurchaseModal();
+    }
+  }
+
   function openCategoryModal(category?: Category) {
     setEditingCategoryId(category?.id ?? null);
     setDraftCategory(
@@ -2064,14 +2361,23 @@ export function FinanceApp() {
   }
 
   function createBillDraft(bill?: Bill): DraftBill {
+    const normalizedDefaultCategoryId = defaultBillCategoryId;
+
     if (!bill) {
-      return initialDraftBill;
+      return {
+        ...initialDraftBill,
+        categoryId: normalizedDefaultCategoryId,
+      };
     }
+
+    const normalizedCategoryId = isHiddenAccountCategoryId(bill.categoryId)
+      ? normalizedDefaultCategoryId
+      : bill.categoryId;
 
     return {
       title: bill.title,
       amount: String(bill.amount),
-      categoryId: bill.categoryId,
+      categoryId: normalizedCategoryId,
       dueDate: bill.dueDate,
       priority: bill.priority,
       status: bill.status,
@@ -2083,6 +2389,18 @@ export function FinanceApp() {
       installments: String(bill.installments ?? 1),
       notes: bill.notes ?? "",
     };
+  }
+
+  function getBillCategoryDisplayName(bill: Bill) {
+    if (bill.categoryId === "cat-bills") {
+      return bill.isRecurring ? "Conta recorrente" : "Conta a pagar";
+    }
+
+    if (bill.categoryId === "cat-debt") {
+      return "Divida";
+    }
+
+    return bill.categoryName;
   }
 
   function getDraftBillCardModes() {
@@ -2097,6 +2415,82 @@ export function FinanceApp() {
     }
 
     return [selectedCard.availableMode];
+  }
+
+  function shouldShowDraftBillInstallments() {
+    return (
+      draftBill.plannedPaymentMethod === "card" &&
+      draftBill.plannedCardMode === "credit" &&
+      !draftBill.isRecurring
+    );
+  }
+
+  function updateDraftBillRecurring(nextRecurring: boolean) {
+    setDraftBill((current) => {
+      const nextRecurringDay = Math.max(
+        1,
+        Math.min(31, Number(current.recurringDay.replace(",", ".")) || Number(current.dueDate.slice(8, 10)) || 1),
+      );
+
+      return {
+        ...current,
+        isRecurring: nextRecurring,
+        recurringDay: String(nextRecurringDay),
+        dueDate: nextRecurring ? alignDateToDay(current.dueDate, nextRecurringDay) : current.dueDate,
+        installments: nextRecurring ? "1" : current.installments,
+      };
+    });
+  }
+
+  function updateDraftBillRecurringDay(nextRecurringDay: string) {
+    setDraftBill((current) => {
+      const safeDay = Math.max(
+        1,
+        Math.min(31, Number(nextRecurringDay.replace(",", ".")) || Number(current.dueDate.slice(8, 10)) || 1),
+      );
+
+      return {
+        ...current,
+        recurringDay: nextRecurringDay,
+        dueDate: current.isRecurring ? alignDateToDay(current.dueDate, safeDay) : current.dueDate,
+      };
+    });
+  }
+
+  function updateDraftBillPaymentMethod(nextMethod: PaymentPlanMethod) {
+    setDraftBill((current) => ({
+      ...current,
+      plannedPaymentMethod: nextMethod,
+      installments:
+        nextMethod === "card" && current.plannedCardMode === "credit" && !current.isRecurring
+          ? current.installments
+          : "1",
+    }));
+  }
+
+  function updateDraftBillCardSelection(nextCardId: string) {
+    setDraftBill((current) => {
+      const nextCard = cards.find((card) => card.id === nextCardId);
+      const nextMode =
+        nextCard?.availableMode === "both"
+          ? current.plannedCardMode
+          : nextCard?.availableMode ?? "credit";
+
+      return {
+        ...current,
+        plannedCardId: nextCardId,
+        plannedCardMode: nextMode,
+        installments: nextMode === "credit" && !current.isRecurring ? current.installments : "1",
+      };
+    });
+  }
+
+  function updateDraftBillCardMode(nextMode: CardMode) {
+    setDraftBill((current) => ({
+      ...current,
+      plannedCardMode: nextMode,
+      installments: nextMode === "credit" && !current.isRecurring ? current.installments : "1",
+    }));
   }
 
   function buildLinkedTransactionsFromBill(bill: Bill) {
@@ -2188,6 +2582,80 @@ export function FinanceApp() {
     };
   }
 
+  function getLinkedDebtEntry(debtId: string) {
+    return fixedEntries.find((entry) => entry.linkedDebtId === debtId);
+  }
+
+  function buildDebtPlanDraft(debt: Debt): DraftDebtPlan {
+    const linkedEntry = getLinkedDebtEntry(debt.id);
+    const unpaidMonths = linkedEntry
+      ? Object.entries(linkedEntry.amountByMonth)
+          .filter(([monthValue, amount]) => amount > 0 && !linkedEntry.completedMonths.includes(monthValue))
+          .sort(([left], [right]) => left.localeCompare(right))
+      : [];
+
+    if (unpaidMonths.length) {
+      const values = unpaidMonths.map(([, amount]) => amount);
+      const installmentAmount = Number(Math.max(...values).toFixed(2));
+
+      return {
+        debtId: debt.id,
+        monthCount: String(unpaidMonths.length),
+        installmentAmount: String(installmentAmount),
+      };
+    }
+
+    const configuredCap =
+      settings.monthlyDebtPaymentCap > 0
+        ? settings.monthlyDebtPaymentCap
+        : debt.installmentAmount > 0
+          ? debt.installmentAmount
+          : Number((Math.max(0, debt.remainingAmount) / 2).toFixed(2));
+    const safeAmount = Number(Math.max(0.01, configuredCap).toFixed(2));
+    const safeMonths = Math.max(1, Math.ceil(Math.max(0, debt.remainingAmount) / safeAmount));
+
+    return {
+      debtId: debt.id,
+      monthCount: String(safeMonths),
+      installmentAmount: String(safeAmount),
+    };
+  }
+
+  function applyDebtPlanFromMonthCount(debtId: string, rawMonthCount: string) {
+    const debt = debts.find((item) => item.id === debtId);
+    if (!debt) {
+      return;
+    }
+
+    const remainingAmount = Math.max(0, debt.remainingAmount);
+    const monthCount = Math.max(1, Number(rawMonthCount.replace(",", ".")) || 1);
+    const normalizedAmount = Number((remainingAmount / monthCount).toFixed(2));
+
+    setDraftDebtPlan({
+      debtId,
+      monthCount: String(monthCount),
+      installmentAmount: String(normalizedAmount),
+    });
+  }
+
+  function applyDebtPlanFromInstallment(debtId: string, rawInstallmentAmount: string) {
+    const debt = debts.find((item) => item.id === debtId);
+    if (!debt) {
+      return;
+    }
+
+    const remainingAmount = Math.max(0, debt.remainingAmount);
+    const installmentAmount = Math.max(0.01, Number(rawInstallmentAmount.replace(",", ".")) || 0.01);
+    const nextMonthCount = Math.max(1, Math.ceil(remainingAmount / installmentAmount));
+    const normalizedAmount = Number(installmentAmount.toFixed(2));
+
+    setDraftDebtPlan({
+      debtId,
+      monthCount: String(nextMonthCount),
+      installmentAmount: String(normalizedAmount),
+    });
+  }
+
   function createAccountDraft(account?: Account): DraftAccount {
     if (!account) {
       return initialDraftAccount;
@@ -2221,6 +2689,53 @@ export function FinanceApp() {
       accentColor: preset.color,
       brand: current.brand || preset.brand,
     }));
+  }
+
+  function openBankPresetEditor(preset?: BankPreset) {
+    setEditingBankIssuer(preset?.issuer ?? null);
+    setDraftBankPreset(
+      preset
+        ? { issuer: preset.issuer, brand: preset.brand, color: preset.color }
+        : initialDraftBankPreset,
+    );
+  }
+
+  function closeBankPresetEditor() {
+    setEditingBankIssuer(null);
+    setDraftBankPreset(initialDraftBankPreset);
+  }
+
+  function handleSaveBankPreset(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!draftBankPreset.issuer.trim()) {
+      return;
+    }
+
+    const nextPreset: BankPreset = {
+      issuer: draftBankPreset.issuer.trim(),
+      brand: draftBankPreset.brand.trim() || "Mastercard",
+      color: draftBankPreset.color,
+    };
+
+    setSettings((current) => {
+      const currentPresets = current.bankPresets?.length ? current.bankPresets : seedBankPresets;
+      const exists = editingBankIssuer
+        ? currentPresets.some((preset) => preset.issuer === editingBankIssuer)
+        : currentPresets.some((preset) => preset.issuer === nextPreset.issuer);
+      const nextPresets = exists
+        ? currentPresets.map((preset) =>
+            preset.issuer === (editingBankIssuer ?? nextPreset.issuer) ? nextPreset : preset,
+          )
+        : [...currentPresets, nextPreset];
+
+      return {
+        ...current,
+        bankPresets: nextPresets,
+      };
+    });
+
+    closeBankPresetEditor();
   }
 
   function handleSaveCard(event: React.FormEvent<HTMLFormElement>) {
@@ -2297,8 +2812,7 @@ export function FinanceApp() {
       .map((transaction) => transaction.date.slice(0, 7))
       .sort((left, right) => left.localeCompare(right));
 
-    updateHomeLocation("accounts", {
-      accounts: "cards",
+    updateHomeLocation("cards", {
       cardId,
       statementMonth: statementMonth ?? cardTransactions.at(-1) ?? selectedMonth,
     });
@@ -2373,7 +2887,7 @@ export function FinanceApp() {
     setNewAccountKind(kind);
     setEditingBillId(null);
     setEditingDebtId(null);
-    setDraftBill(initialDraftBill);
+    setDraftBill(createBillDraft());
     setDraftDebt(initialDraftDebt);
     setIsNewAccountModalOpen(true);
   }
@@ -2381,18 +2895,21 @@ export function FinanceApp() {
   function closeNewAccountModal() {
     setIsNewAccountModalOpen(false);
     setNewAccountKind("bill");
-    setDraftBill(initialDraftBill);
+    setDraftBill(createBillDraft());
     setDraftDebt(initialDraftDebt);
   }
 
   function closeBillModal() {
     setEditingBillId(null);
-    setDraftBill(initialDraftBill);
+    setDraftBill(createBillDraft());
     setIsBillModalOpen(false);
   }
 
   function persistBillDraft(targetBillId: string | null = editingBillId) {
-    const category = categories.find((item) => item.id === draftBill.categoryId);
+    const normalizedCategoryId = isHiddenAccountCategoryId(draftBill.categoryId)
+      ? defaultBillCategoryId
+      : draftBill.categoryId;
+    const category = categories.find((item) => item.id === normalizedCategoryId);
     const amount = Number(draftBill.amount.replace(",", ".")) || 0;
     const installments = Math.max(1, Number(draftBill.installments.replace(",", ".")) || 1);
     const recurringDay = Math.max(1, Math.min(31, Number(draftBill.recurringDay.replace(",", ".")) || 1));
@@ -2427,7 +2944,9 @@ export function FinanceApp() {
       plannedCardId: draftBill.plannedPaymentMethod === "card" ? draftBill.plannedCardId : undefined,
       plannedCardMode: draftBill.plannedPaymentMethod === "card" ? draftBill.plannedCardMode : undefined,
       installments:
-        draftBill.plannedPaymentMethod === "card" && draftBill.plannedCardMode === "credit"
+        draftBill.plannedPaymentMethod === "card" &&
+        draftBill.plannedCardMode === "credit" &&
+        !draftBill.isRecurring
           ? installments
           : 1,
       recurringGroupId: existingGroupId,
@@ -2525,6 +3044,16 @@ export function FinanceApp() {
     setIsDebtModalOpen(false);
   }
 
+  function openDebtPlanModal(debt: Debt) {
+    setDraftDebtPlan(buildDebtPlanDraft(debt));
+    setIsDebtPlanModalOpen(true);
+  }
+
+  function closeDebtPlanModal() {
+    setDraftDebtPlan(initialDraftDebtPlan);
+    setIsDebtPlanModalOpen(false);
+  }
+
   function persistDebtDraft(targetDebtId: string | null = editingDebtId) {
     const totalAmount = Number(draftDebt.totalAmount.replace(",", ".")) || 0;
     const paidAmount = Number(draftDebt.paidAmount.replace(",", ".")) || 0;
@@ -2574,6 +3103,113 @@ export function FinanceApp() {
     if (persistDebtDraft(editingDebtId)) {
       closeDebtModal();
     }
+  }
+
+  function handleApplyDebtPlan(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const debt = debts.find((item) => item.id === draftDebtPlan.debtId);
+    if (!debt) {
+      return;
+    }
+
+    const remainingAmount = Math.max(0, debt.remainingAmount);
+    if (remainingAmount <= 0) {
+      closeDebtPlanModal();
+      return;
+    }
+
+    const monthCount = Math.max(1, Number(draftDebtPlan.monthCount.replace(",", ".")) || 1);
+    const installmentAmount = Math.max(
+      0.01,
+      Number(draftDebtPlan.installmentAmount.replace(",", ".")) || debt.installmentAmount || 0.01,
+    );
+    const debtCategory =
+      categories.find((item) => item.id === "cat-debt") ??
+      categories.find((item) => item.name === "Dividas") ??
+      categories.find((item) => item.type === "expense") ??
+      categories[0];
+    if (!debtCategory) {
+      return;
+    }
+
+    const paymentDetails = getPlannedPaymentDetails(
+      debt.plannedPaymentMethod,
+      debt.plannedCardId,
+      "credit",
+      cards,
+    );
+    const linkedEntry = getLinkedDebtEntry(debt.id);
+    const { schedule } = buildDebtPlanSchedule(
+      selectedMonth,
+      remainingAmount,
+      monthCount,
+      installmentAmount,
+    );
+    const knownMonths = new Set([
+      ...salaryCalendarMonths.map((monthItem) => monthItem.monthValue),
+      ...Object.keys(linkedEntry?.amountByMonth ?? {}),
+      ...schedule.map((item) => item.monthValue),
+    ]);
+    const nextAmountByMonth = Object.fromEntries(
+      [...knownMonths].map((monthValue) => [monthValue, 0]),
+    ) as Record<string, number>;
+
+    schedule.forEach((item) => {
+      nextAmountByMonth[item.monthValue] = item.amount;
+    });
+
+    const nextCompletedMonths = (linkedEntry?.completedMonths ?? []).filter(
+      (monthValue) => (nextAmountByMonth[monthValue] ?? 0) > 0,
+    );
+    const nextEntry: FixedFlowEntry = {
+      id: linkedEntry?.id ?? `fixed-debt-${debt.id}`,
+      section: "Dividas e repasses",
+      title: debt.name,
+      kind: "expense",
+      categoryId: debtCategory.id,
+      categoryName: debtCategory.name,
+      amountByMonth: nextAmountByMonth,
+      completedMonths: nextCompletedMonths,
+      paymentMethod: paymentDetails.transactionMethod,
+      accountId: linkedEntry?.accountId ?? settings.defaultAccountId,
+      cardId: paymentDetails.cardId,
+      cardMode: paymentDetails.cardMode,
+      linkedBillGroupId: undefined,
+      linkedDebtId: debt.id,
+      linkedInvestmentId: undefined,
+      syncCardLimit: false,
+      manualAmountMonths: linkedEntry?.manualAmountMonths ?? [],
+      notes: debt.description ?? linkedEntry?.notes,
+    };
+
+    setFixedEntries((current) => {
+      const existingIndex = current.findIndex((entry) => entry.linkedDebtId === debt.id);
+      if (existingIndex >= 0) {
+        return current.map((entry, index) => (index === existingIndex ? nextEntry : entry));
+      }
+
+      return [nextEntry, ...current];
+    });
+
+    const nextDueDate = alignDateToDay(
+      `${selectedMonth}-01`,
+      Number(debt.nextDueDate.slice(8, 10)) || 1,
+    );
+
+    setDebts((current) =>
+      current.map((item) =>
+        item.id === debt.id
+          ? {
+              ...item,
+              installmentAmount,
+              nextDueDate,
+            }
+          : item,
+      ),
+    );
+
+    closeDebtPlanModal();
   }
 
   function handleSaveNewAccount(event: React.FormEvent<HTMLFormElement>) {
@@ -2801,26 +3437,57 @@ export function FinanceApp() {
     return nextAmounts;
   }
 
+  function getReserveMonthlyPlan(purchase: PlannedPurchase) {
+    const remaining = Math.max(0, purchase.estimatedValue - purchase.savedAmount);
+    const targetMonth = purchase.targetMonth ?? purchase.desiredDate?.slice(0, 7) ?? selectedMonth;
+    const months: string[] = [];
+    let cursor = selectedMonth;
+
+    while (cursor <= targetMonth) {
+      months.push(cursor);
+      cursor = getMonthValueOffset(cursor, 1);
+      if (months.length > 24) {
+        break;
+      }
+    }
+
+    const monthCount = Math.max(1, months.length);
+    const suggestedMonthlyAmount =
+      purchase.suggestedPeriodAmount > 0
+        ? purchase.suggestedPeriodAmount
+        : Number((remaining / monthCount).toFixed(2));
+
+    return {
+      remaining,
+      monthCount,
+      suggestedMonthlyAmount,
+      targetMonth,
+    };
+  }
+
   function createMonthlyGridRows(): MonthlyGridRow[] {
-    const fixedRows: MonthlyGridRow[] = fixedEntries.map((entry) => ({
-      id: `fixed-grid-${entry.id}`,
-      section: entry.section,
-      sourceType: "fixed",
-      sourceId: entry.id,
-      title: entry.title,
-      categoryId: entry.categoryId,
-      categoryName: entry.categoryName,
-      paymentMethod: entry.paymentMethod,
-      accountId: entry.accountId,
-      cardId: entry.cardId,
-      cardMode: entry.cardMode,
-      linkedBillGroupId: entry.linkedBillGroupId,
-      linkedInvestmentId: entry.linkedInvestmentId,
-      syncCardLimit: entry.syncCardLimit,
-      notes: entry.notes,
-      amountByMonth: entry.amountByMonth,
-      completedMonths: entry.completedMonths,
-    }));
+    const fixedRows: MonthlyGridRow[] = fixedEntries
+      .filter((entry) => !(entry.linkedBillGroupId && entry.paymentMethod === "credit_card" && entry.cardId))
+      .map((entry) => ({
+        id: `fixed-grid-${entry.id}`,
+        section: entry.section,
+        sourceType: "fixed",
+        sourceId: entry.id,
+        title: entry.title,
+        categoryId: entry.categoryId,
+        categoryName: entry.categoryName,
+        paymentMethod: entry.paymentMethod,
+        accountId: entry.accountId,
+        cardId: entry.cardId,
+        cardMode: entry.cardMode,
+        linkedBillGroupId: entry.linkedBillGroupId,
+        linkedDebtId: entry.linkedDebtId,
+        linkedInvestmentId: entry.linkedInvestmentId,
+        syncCardLimit: entry.syncCardLimit,
+        notes: entry.notes,
+        amountByMonth: entry.amountByMonth,
+        completedMonths: entry.completedMonths,
+      }));
 
     const cardAutoRows: MonthlyGridRow[] = cards
       .filter((card) => card.availableMode !== "debit")
@@ -2846,6 +3513,7 @@ export function FinanceApp() {
           accountId: card.linkedAccountId ?? settings.defaultAccountId,
           cardId: card.id,
           cardMode: "credit" as CardMode,
+          linkedDebtId: undefined,
           notes: "Fatura automatica gerada a partir dos lancamentos de credito do cartao.",
           amountByMonth,
           completedMonths: [],
@@ -2878,6 +3546,7 @@ export function FinanceApp() {
           cardId: purchase.plannedCardId,
           cardMode: purchase.plannedCardMode,
           linkedBillGroupId: undefined,
+          linkedDebtId: undefined,
           notes: purchase.description,
           amountByMonth: getPlannedPurchaseAmountByMonth(purchase),
           completedMonths: purchase.status === "bought" ? [purchaseTargetMonth] : [],
@@ -3178,6 +3847,7 @@ export function FinanceApp() {
             ? "debit"
           : undefined,
       linkedBillGroupId,
+      linkedDebtId: existingEntry?.linkedDebtId,
       linkedInvestmentId: existingEntry?.linkedInvestmentId,
       syncCardLimit: isCardSynced,
       manualAmountMonths,
@@ -3270,7 +3940,7 @@ export function FinanceApp() {
         entry.kind === "expense"
           ? entry.linkedInvestmentId
             ? "investment"
-            : entry.categoryId === "cat-debt"
+            : entry.linkedDebtId || entry.categoryId === "cat-debt"
             ? "debt_payment"
             : "fixed"
           : undefined,
@@ -3352,7 +4022,7 @@ export function FinanceApp() {
     const nextAmount = Math.max(0, Number(parsedValue.toFixed(2)));
     const marker = getFixedEntryMarker(entryId, monthValue);
     const nextAmounts =
-      entry.categoryId === "cat-debt"
+      entry.linkedDebtId || entry.categoryId === "cat-debt"
         ? buildDebtFixedAmounts(entry, monthValue, nextAmount)
         : {
             ...entry.amountByMonth,
@@ -3542,6 +4212,49 @@ export function FinanceApp() {
       ),
     );
 
+    if (entry.linkedDebtId) {
+      setDebts((current) =>
+        current.map((debt) => {
+          if (debt.id !== entry.linkedDebtId) {
+            return debt;
+          }
+
+          const nextPaidAmount = Number(
+            Math.max(
+              0,
+              Math.min(
+                debt.totalAmount,
+                debt.paidAmount + (isCompleted ? -amount : amount),
+              ),
+            ).toFixed(2),
+          );
+          const nextPaidInstallments = Math.max(
+            0,
+            Math.min(
+              debt.totalInstallments,
+              debt.paidInstallments + (isCompleted ? -1 : 1),
+            ),
+          );
+          const nextRemainingAmount = Number(
+            Math.max(0, debt.totalAmount - nextPaidAmount).toFixed(2),
+          );
+
+          return {
+            ...debt,
+            paidAmount: nextPaidAmount,
+            paidInstallments: nextPaidInstallments,
+            remainingAmount: nextRemainingAmount,
+            status:
+              nextRemainingAmount === 0
+                ? "settled"
+                : debt.status === "paused"
+                  ? "paused"
+                  : "active",
+          };
+        }),
+      );
+    }
+
     if (entry.linkedInvestmentId) {
       const linkedInvestment = investments.find((investment) => investment.id === entry.linkedInvestmentId);
       if (!linkedInvestment) {
@@ -3729,7 +4442,7 @@ export function FinanceApp() {
             incomeKind: entry.kind === "income" ? "fixed_received" : transaction.incomeKind,
             expenseKind:
               entry.kind === "expense"
-                ? entry.categoryId === "cat-debt"
+                ? entry.linkedDebtId || entry.categoryId === "cat-debt"
                   ? "debt_payment"
                   : "fixed"
                 : transaction.expenseKind,
@@ -4016,6 +4729,20 @@ export function FinanceApp() {
       cards,
     );
     const paymentAmount = Math.min(debt.installmentAmount, debt.remainingAmount);
+    const linkedEntry = getLinkedDebtEntry(debt.id);
+    const nextPlannedMonth = linkedEntry
+      ? Object.entries(linkedEntry.amountByMonth)
+          .filter(
+            ([monthValue, amount]) =>
+              amount > 0 &&
+              !linkedEntry.completedMonths.includes(monthValue) &&
+              monthValue >= selectedMonth,
+          )
+          .sort(([left], [right]) => left.localeCompare(right))[0]?.[0] ??
+        Object.entries(linkedEntry.amountByMonth)
+          .filter(([monthValue, amount]) => amount > 0 && !linkedEntry.completedMonths.includes(monthValue))
+          .sort(([left], [right]) => left.localeCompare(right))[0]?.[0]
+      : undefined;
 
     setDebts((current) =>
       current.map((debt) => {
@@ -4036,6 +4763,21 @@ export function FinanceApp() {
         };
       }),
     );
+
+    if (linkedEntry && nextPlannedMonth) {
+      setFixedEntries((current) =>
+        current.map((entry) =>
+          entry.id === linkedEntry.id
+            ? {
+                ...entry,
+                completedMonths: entry.completedMonths.includes(nextPlannedMonth)
+                  ? entry.completedMonths
+                  : [...entry.completedMonths, nextPlannedMonth],
+              }
+            : entry,
+        ),
+      );
+    }
 
     setTransactions((current) => [
       {
@@ -4191,6 +4933,7 @@ export function FinanceApp() {
       { id: "grid", label: "Planilha" },
       { id: "planning", label: "Planejamento" },
       { id: "accounts", label: "Contas" },
+      { id: "cards", label: "Cartoes" },
     ];
 
     return (
@@ -4216,7 +4959,9 @@ export function FinanceApp() {
           ? renderTransactionsWorkspace()
           : homeTab === "planning"
             ? renderPlanning()
-            : renderBills()}
+            : homeTab === "accounts"
+              ? renderBills()
+              : renderCardsHomeTab()}
       </div>
     );
   }
@@ -4309,7 +5054,7 @@ export function FinanceApp() {
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-2">
                     <p className="text-sm font-semibold text-white">Comparativo mensal</p>
                     <p className="max-w-full text-[11px] uppercase tracking-[0.18em] text-white/60">
-                      Entradas, saídas programadas e saldo previsto
+                      Entradas, saidas programadas e saldo previsto
                     </p>
                   </div>
                   <table className="w-full border-separate border-spacing-0 text-[11px]">
@@ -4342,7 +5087,7 @@ export function FinanceApp() {
                               monthItem.monthValue === selectedMonth ? "bg-emerald-500/20" : "bg-transparent"
                             }`}
                           >
-                            {monthItem.income > 0 ? formatCurrency(monthItem.income) : "—"}
+                            {monthItem.income > 0 ? formatCurrency(monthItem.income) : "â€”"}
                           </td>
                         ))}
                       </tr>
@@ -4357,7 +5102,7 @@ export function FinanceApp() {
                               monthItem.monthValue === selectedMonth ? "bg-rose-500/20" : "bg-transparent"
                             }`}
                           >
-                            {monthItem.expenses > 0 ? formatCurrency(monthItem.expenses) : "—"}
+                            {monthItem.expenses > 0 ? formatCurrency(monthItem.expenses) : "â€”"}
                           </td>
                         ))}
                       </tr>
@@ -4499,6 +5244,16 @@ export function FinanceApp() {
                                     const isCompleted = row.completedMonths.includes(monthItem.monthValue);
                                     const isPurchaseRow = row.sourceType === "planned_purchase";
                                     const isCardAutoBillRow = row.sourceType === "card_auto_bill";
+                                    const cardBillCellKey = `${row.sourceId}-${monthItem.monthValue}`;
+                                    const cardFixedItems =
+                                      isCardAutoBillRow
+                                        ? fixedEntries.filter(
+                                            (entry) =>
+                                              entry.paymentMethod === "credit_card" &&
+                                              entry.cardId === row.sourceId &&
+                                              (entry.amountByMonth[monthItem.monthValue] ?? 0) > 0,
+                                          )
+                                        : [];
 
                                     return (
                                       <td
@@ -4545,33 +5300,64 @@ export function FinanceApp() {
                                             }`}
                                           >
                                             <span className="text-[11px] font-semibold leading-tight">
-                                              {amount > 0 ? formatCurrency(amount) : "—"}
+                                              {amount > 0 ? formatCurrency(amount) : "â€”"}
                                             </span>
                                             <span className="text-[9px] font-semibold uppercase tracking-[0.12em]">
                                               {amount <= 0 ? "Sem valor" : isCompleted ? "Comprado" : "Abrir"}
                                             </span>
                                           </button>
                                         ) : isCardAutoBillRow ? (
-                                          <button
-                                            type="button"
-                                            onClick={() =>
-                                              openCardDetails(row.sourceId, getMonthValueOffset(monthItem.monthValue, -1))
-                                            }
-                                            className={`flex h-full min-h-[72px] w-full flex-col justify-between rounded-[18px] px-2 py-2 text-left transition ${
+                                          <div
+                                            className={`flex min-h-[72px] w-full flex-col justify-between rounded-[18px] px-2 py-2 text-left transition ${
                                               amount <= 0
-                                                ? "bg-slate-50 text-slate-300 hover:bg-slate-100"
+                                                ? "bg-slate-50 text-slate-300"
                                                 : isCompleted
-                                                  ? "bg-sky-100 text-sky-800 hover:bg-sky-200"
-                                                  : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                                                  ? "bg-sky-100 text-sky-800"
+                                                  : "bg-slate-100 text-slate-700"
                                             }`}
                                           >
-                                            <span className="text-[11px] font-semibold leading-tight">
-                                              {amount > 0 ? formatCurrency(amount) : "—"}
-                                            </span>
-                                            <span className="text-[9px] font-semibold uppercase tracking-[0.12em]">
-                                              {amount <= 0 ? "Sem fatura" : isCompleted ? "Quitada" : "Abrir"}
-                                            </span>
-                                          </button>
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                openCardDetails(row.sourceId, getMonthValueOffset(monthItem.monthValue, -1))
+                                              }
+                                              className="text-left"
+                                            >
+                                              <span className="block text-[11px] font-semibold leading-tight">
+                                                {amount > 0 ? formatCurrency(amount) : "â€”"}
+                                              </span>
+                                              <span className="mt-2 block text-[9px] font-semibold uppercase tracking-[0.12em]">
+                                                {amount <= 0 ? "Sem fatura" : isCompleted ? "Quitada" : "Abrir"}
+                                              </span>
+                                            </button>
+                                            {cardFixedItems.length ? (
+                                              <button
+                                                type="button"
+                                                onClick={(event) => {
+                                                  event.stopPropagation();
+                                                  setExpandedCardBillCells((current) => ({
+                                                    ...current,
+                                                    [cardBillCellKey]: !current[cardBillCellKey],
+                                                  }));
+                                                }}
+                                                className="mt-2 rounded-full bg-white/80 px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-sky-700"
+                                              >
+                                                {expandedCardBillCells[cardBillCellKey] ? "Ocultar itens" : "Visualizar itens"}
+                                              </button>
+                                            ) : null}
+                                            {expandedCardBillCells[cardBillCellKey] ? (
+                                              <div className="mt-2 space-y-1 border-t border-sky-200/70 pt-2">
+                                                {cardFixedItems.map((entry) => (
+                                                  <div key={entry.id} className="flex justify-between gap-2 text-[10px]">
+                                                    <span className="truncate">{entry.title}</span>
+                                                    <span className="font-semibold">
+                                                      {formatCurrency(entry.amountByMonth[monthItem.monthValue] ?? 0)}
+                                                    </span>
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            ) : null}
+                                          </div>
                                         ) : (
                                           <div
                                             draggable={amount > 0}
@@ -4653,7 +5439,7 @@ export function FinanceApp() {
                                       salaryCalendarMonths[index].monthValue === selectedMonth ? "bg-sky-700" : ""
                                     }`}
                                   >
-                                    {amount > 0 ? formatCurrency(amount) : "—"}
+                                    {amount > 0 ? formatCurrency(amount) : "â€”"}
                                   </td>
                                 ))}
                                 <td className="rounded-br-2xl border border-slate-200 bg-slate-900 px-2 py-2.5 text-right text-[10px] font-semibold text-white">
@@ -4916,7 +5702,7 @@ export function FinanceApp() {
                   className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-600 transition hover:bg-slate-200"
                   aria-label="Fechar modal"
                 >
-                  Ãƒâ€”
+                  ×
                 </button>
               </div>
 
@@ -4989,7 +5775,11 @@ export function FinanceApp() {
                       className="field"
                     >
                       {categories
-                        .filter((category) => category.type === draftTransaction.type)
+                        .filter((category) =>
+                          draftTransaction.type === "income"
+                            ? category.type === "income"
+                            : category.type === "expense" && !isHiddenUiCategoryId(category.id),
+                        )
                         .map((category) => (
                           <option key={category.id} value={category.id}>
                             {category.name}
@@ -5161,7 +5951,7 @@ export function FinanceApp() {
               className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-600 transition hover:bg-slate-200"
               aria-label="Fechar modal"
             >
-              ×
+              x
             </button>
           </div>
 
@@ -5371,7 +6161,7 @@ export function FinanceApp() {
               className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-600 transition hover:bg-slate-200"
               aria-label="Fechar modal"
             >
-              ×
+              x
             </button>
           </div>
 
@@ -5589,6 +6379,8 @@ export function FinanceApp() {
     const originLabel =
       row.sourceType === "planned_purchase"
         ? "Compra planejada"
+        : row.linkedDebtId
+          ? "Planejamento de divida"
         : row.linkedBillGroupId
           ? "Valor fixo sincronizado com Contas"
           : "Valor fixo recorrente";
@@ -5614,7 +6406,7 @@ export function FinanceApp() {
               className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-600 transition hover:bg-slate-200"
               aria-label="Fechar modal"
             >
-              ×
+              x
             </button>
           </div>
 
@@ -5657,6 +6449,12 @@ export function FinanceApp() {
             {row.linkedBillGroupId ? (
               <div className="rounded-[24px] border border-sky-100 bg-sky-50 px-4 py-4 text-sm text-sky-800">
                 Este item esta sincronizado com a area de Contas. Ajustes estruturais refletem nos dois lados.
+              </div>
+            ) : null}
+
+            {row.linkedDebtId ? (
+              <div className="rounded-[24px] border border-amber-100 bg-amber-50 px-4 py-4 text-sm text-amber-800">
+                Este item veio do planejamento de uma divida e permanece vinculado a ela na area de Contas.
               </div>
             ) : null}
 
@@ -5772,7 +6570,7 @@ export function FinanceApp() {
               className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-600 transition hover:bg-slate-200"
               aria-label="Fechar modal"
             >
-              ×
+              x
             </button>
           </div>
 
@@ -5903,9 +6701,9 @@ export function FinanceApp() {
               <div className="rounded-[24px] border border-sky-100 bg-sky-50/70 px-4 py-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <p className="text-sm font-semibold text-slate-900">Usar o limite do cartão como base mensal</p>
+                    <p className="text-sm font-semibold text-slate-900">Usar o limite do cartao como base mensal</p>
                     <p className="mt-1 text-xs text-slate-500">
-                      Ideal para simular gasto fixo mensal do cartão e manter a linha sincronizada quando o limite mudar.
+                      Ideal para simular gasto fixo mensal do cartao e manter a linha sincronizada quando o limite mudar.
                     </p>
                   </div>
                   <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
@@ -6038,7 +6836,7 @@ export function FinanceApp() {
               className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-600 transition hover:bg-slate-200"
               aria-label="Fechar modal"
             >
-              Ã—
+              x
             </button>
           </div>
 
@@ -6216,6 +7014,15 @@ export function FinanceApp() {
                     Ja comprei
                   </button>
                 ) : null}
+                {editingPurchaseId ? (
+                  <button
+                    type="button"
+                    onClick={() => handleDeletePurchase(editingPurchaseId)}
+                    className="rounded-2xl border border-red-200 px-4 py-3 text-sm font-semibold text-red-600 transition hover:bg-red-50"
+                  >
+                    Excluir
+                  </button>
+                ) : null}
               </div>
 
               <div className="flex gap-3">
@@ -6270,7 +7077,7 @@ export function FinanceApp() {
               className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-600 transition hover:bg-slate-200"
               aria-label="Fechar modal"
             >
-              Ã—
+              x
             </button>
           </div>
 
@@ -6378,7 +7185,7 @@ export function FinanceApp() {
               className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-600 transition hover:bg-slate-200"
               aria-label="Fechar modal"
             >
-              Ã—
+              x
             </button>
           </div>
 
@@ -6518,6 +7325,183 @@ export function FinanceApp() {
     );
   }
 
+  function renderBillFormFields(mode: "create" | "edit" = "edit") {
+    const usesCard = draftBill.plannedPaymentMethod === "card";
+    const canShowInstallments = shouldShowDraftBillInstallments();
+    const showPriorityAndStatus = mode === "edit";
+
+    return (
+      <>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <FormField label="Titulo">
+            <input
+              value={draftBill.title}
+              onChange={(event) => setDraftBill((current) => ({ ...current, title: event.target.value }))}
+              className="field"
+            />
+          </FormField>
+          <FormField label="Valor">
+            <input
+              value={draftBill.amount}
+              onChange={(event) => setDraftBill((current) => ({ ...current, amount: event.target.value }))}
+              inputMode="decimal"
+              className="field"
+            />
+          </FormField>
+        </div>
+
+        <div className={`grid gap-3 ${showPriorityAndStatus ? "sm:grid-cols-2 xl:grid-cols-4" : "sm:grid-cols-2 xl:grid-cols-2"}`}>
+          {showPriorityAndStatus ? (
+            <FormField label="Prioridade">
+              <select
+                value={draftBill.priority}
+                onChange={(event) =>
+                  setDraftBill((current) => ({ ...current, priority: event.target.value as FinancePriority }))
+                }
+                className="field"
+              >
+                {planningPriorityOptions.map((priority) => (
+                  <option key={priority} value={priority}>
+                    {priority}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+          ) : null}
+          {showPriorityAndStatus ? (
+            <FormField label="Status">
+              <select
+                value={draftBill.status}
+                onChange={(event) =>
+                  setDraftBill((current) => ({ ...current, status: event.target.value as DraftBill["status"] }))
+                }
+                className="field"
+              >
+                <option value="pending">Pendente</option>
+                <option value="paid">Paga</option>
+                <option value="overdue">Atrasada</option>
+              </select>
+            </FormField>
+          ) : null}
+          <FormField label="Recorrente">
+            <label className="flex h-[52px] items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold text-slate-700">
+              <input
+                type="checkbox"
+                checked={draftBill.isRecurring}
+                onChange={(event) => updateDraftBillRecurring(event.target.checked)}
+              />
+              Repetir todo mes
+            </label>
+          </FormField>
+          <FormField label="Categoria">
+            <select
+              value={draftBill.categoryId}
+              onChange={(event) => setDraftBill((current) => ({ ...current, categoryId: event.target.value }))}
+              className="field"
+            >
+              {selectableBillCategories.length > 0 ? (
+                selectableBillCategories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))
+              ) : (
+                <option value={draftBill.categoryId}>Sem categoria de despesa</option>
+              )}
+            </select>
+          </FormField>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          {draftBill.isRecurring ? (
+            <FormField label="Dia recorrente">
+              <input
+                value={draftBill.recurringDay}
+                onChange={(event) => updateDraftBillRecurringDay(event.target.value)}
+                inputMode="numeric"
+                className="field"
+              />
+            </FormField>
+          ) : (
+            <FormField label="Vencimento">
+              <input
+                type="date"
+                value={draftBill.dueDate}
+                onChange={(event) => setDraftBill((current) => ({ ...current, dueDate: event.target.value }))}
+                className="field"
+              />
+            </FormField>
+          )}
+
+          <FormField label="Como pagar">
+            <select
+              value={draftBill.plannedPaymentMethod}
+              onChange={(event) => updateDraftBillPaymentMethod(event.target.value as PaymentPlanMethod)}
+              className="field"
+            >
+              <option value="pix">Pix</option>
+              <option value="cash">Dinheiro</option>
+              <option value="bank_transfer">Transferencia</option>
+              <option value="card">Cartao</option>
+            </select>
+          </FormField>
+        </div>
+
+        {usesCard ? (
+          <div className={`grid gap-3 ${canShowInstallments ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
+            <FormField label="Cartao">
+              <select
+                value={draftBill.plannedCardId}
+                onChange={(event) => updateDraftBillCardSelection(event.target.value)}
+                className="field"
+              >
+                {cards.map((card) => (
+                  <option key={card.id} value={card.id}>
+                    {card.name}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+            <FormField label="Modalidade">
+              <select
+                value={draftBill.plannedCardMode}
+                onChange={(event) => updateDraftBillCardMode(event.target.value as CardMode)}
+                className="field"
+              >
+                {getDraftBillCardModes().map((mode) => (
+                  <option key={mode} value={mode}>
+                    {mode === "credit" ? "Credito" : "Debito"}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+            {canShowInstallments ? (
+              <FormField label="Parcelas">
+                <input
+                  value={draftBill.installments}
+                  onChange={(event) =>
+                    setDraftBill((current) => ({ ...current, installments: event.target.value }))
+                  }
+                  inputMode="numeric"
+                  className="field"
+                />
+              </FormField>
+            ) : null}
+          </div>
+        ) : null}
+
+        <FormField label="Observacao">
+          <textarea
+            value={draftBill.notes}
+            onChange={(event) => setDraftBill((current) => ({ ...current, notes: event.target.value }))}
+            rows={4}
+            className="field resize-none"
+          />
+        </FormField>
+      </>
+    );
+  }
+
   function renderBillModal() {
     if (!isBillModalOpen) {
       return null;
@@ -6525,169 +7509,48 @@ export function FinanceApp() {
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
-        <div className="w-full max-w-2xl rounded-[30px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-xs uppercase tracking-[0.24em] text-sky-600">
-                {editingBillId ? "Editar conta" : "Nova conta"}
-              </p>
-              <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                {editingBillId ? "Atualizar conta a pagar" : "Adicionar conta a pagar"}
-              </h3>
-            </div>
-            <button type="button" onClick={closeBillModal} className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-600 transition hover:bg-slate-200">
-              Ã—
-            </button>
-          </div>
-
-          <form onSubmit={handleSaveBill} className="mt-6 space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <FormField label="Titulo">
-                <input value={draftBill.title} onChange={(event) => setDraftBill((current) => ({ ...current, title: event.target.value }))} className="field" />
-              </FormField>
-              <FormField label="Valor">
-                <input value={draftBill.amount} onChange={(event) => setDraftBill((current) => ({ ...current, amount: event.target.value }))} inputMode="decimal" className="field" />
-              </FormField>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <FormField label="Categoria">
-                <select value={draftBill.categoryId} onChange={(event) => setDraftBill((current) => ({ ...current, categoryId: event.target.value }))} className="field">
-                  {categories.filter((category) => category.type === "expense").map((category) => (
-                    <option key={category.id} value={category.id}>{category.name}</option>
-                  ))}
-                </select>
-              </FormField>
-              <FormField label="Vencimento">
-                <input type="date" value={draftBill.dueDate} onChange={(event) => setDraftBill((current) => ({ ...current, dueDate: event.target.value }))} className="field" />
-              </FormField>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-4">
-              <FormField label="Prioridade">
-                <select value={draftBill.priority} onChange={(event) => setDraftBill((current) => ({ ...current, priority: event.target.value as FinancePriority }))} className="field">
-                  {planningPriorityOptions.map((priority) => (
-                    <option key={priority} value={priority}>{priority}</option>
-                  ))}
-                </select>
-              </FormField>
-              <FormField label="Status">
-                <select value={draftBill.status} onChange={(event) => setDraftBill((current) => ({ ...current, status: event.target.value as DraftBill["status"] }))} className="field">
-                  <option value="pending">Pendente</option>
-                  <option value="paid">Paga</option>
-                  <option value="overdue">Atrasada</option>
-                </select>
-              </FormField>
-              <FormField label="Como pagar">
-                <select
-                  value={draftBill.plannedPaymentMethod}
-                  onChange={(event) =>
-                    setDraftBill((current) => ({
-                      ...current,
-                      plannedPaymentMethod: event.target.value as PaymentPlanMethod,
-                    }))
-                  }
-                  className="field"
-                >
-                  <option value="pix">Pix</option>
-                  <option value="cash">Dinheiro</option>
-                  <option value="bank_transfer">Transferencia</option>
-                  <option value="card">Cartao</option>
-                </select>
-              </FormField>
-              <FormField label="Recorrente">
-                <label className="flex h-[52px] items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={draftBill.isRecurring}
-                    onChange={(event) =>
-                      setDraftBill((current) => ({ ...current, isRecurring: event.target.checked }))
-                    }
-                  />
-                  Repetir todo mes
-                </label>
-              </FormField>
-              <FormField label="Dia mensal">
-                <input
-                  value={draftBill.recurringDay}
-                  onChange={(event) =>
-                    setDraftBill((current) => ({ ...current, recurringDay: event.target.value }))
-                  }
-                  inputMode="numeric"
-                  disabled={!draftBill.isRecurring}
-                  className="field disabled:opacity-60"
-                />
-              </FormField>
-            </div>
-            {draftBill.plannedPaymentMethod === "card" ? (
-              <div className="grid gap-3 sm:grid-cols-3">
-                <FormField label="Cartao planejado">
-                  <select
-                    value={draftBill.plannedCardId}
-                    onChange={(event) =>
-                      setDraftBill((current) => {
-                        const nextCard = cards.find((card) => card.id === event.target.value);
-                        const nextMode =
-                          nextCard?.availableMode === "both"
-                            ? current.plannedCardMode
-                            : nextCard?.availableMode ?? "credit";
-
-                        return {
-                          ...current,
-                          plannedCardId: event.target.value,
-                          plannedCardMode: nextMode,
-                        };
-                      })
-                    }
-                    className="field"
-                  >
-                    {cards.map((card) => (
-                      <option key={card.id} value={card.id}>{card.name}</option>
-                    ))}
-                  </select>
-                </FormField>
-                <FormField label="Modalidade">
-                  <select
-                    value={draftBill.plannedCardMode}
-                    onChange={(event) =>
-                      setDraftBill((current) => ({
-                        ...current,
-                        plannedCardMode: event.target.value as CardMode,
-                      }))
-                    }
-                    className="field"
-                  >
-                    {getDraftBillCardModes().map((mode) => (
-                      <option key={mode} value={mode}>
-                        {mode === "credit" ? "Credito" : "Debito"}
-                      </option>
-                    ))}
-                  </select>
-                </FormField>
-                {draftBill.plannedCardMode === "credit" ? (
-                  <FormField label="Parcelas">
-                    <input
-                      value={draftBill.installments}
-                      onChange={(event) =>
-                        setDraftBill((current) => ({ ...current, installments: event.target.value }))
-                      }
-                      inputMode="numeric"
-                      className="field"
-                    />
-                  </FormField>
-                ) : (
-                  <FormField label="Parcelas">
-                    <input value="1" disabled className="field opacity-60" />
-                  </FormField>
-                )}
+        <div className="w-full max-w-2xl overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
+          <div className="flex max-h-[88vh] flex-col">
+            <div className="flex items-start justify-between gap-4 px-6 pt-6">
+              <div>
+                <p className="text-xs uppercase tracking-[0.24em] text-sky-600">
+                  {editingBillId ? "Editar conta" : "Nova conta"}
+                </p>
+                <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                  {editingBillId ? "Atualizar conta" : "Adicionar conta"}
+                </h3>
               </div>
-            ) : null}
-            <FormField label="Observacao">
-              <textarea value={draftBill.notes} onChange={(event) => setDraftBill((current) => ({ ...current, notes: event.target.value }))} rows={4} className="field resize-none" />
-            </FormField>
-            <div className="flex justify-end gap-3">
-              <button type="button" onClick={closeBillModal} className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Cancelar</button>
-              <button type="submit" className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700">Salvar conta</button>
+              <button
+                type="button"
+                onClick={closeBillModal}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-base font-semibold text-slate-600 transition hover:bg-slate-200"
+                aria-label="Fechar modal"
+              >
+                x
+              </button>
             </div>
-          </form>
+
+            <form onSubmit={handleSaveBill} className="flex min-h-0 flex-1 flex-col">
+              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+                {renderBillFormFields("edit")}
+              </div>
+              <div className="flex shrink-0 justify-end gap-3 border-t border-slate-200/80 bg-white px-6 py-4">
+                <button
+                  type="button"
+                  onClick={closeBillModal}
+                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
+                >
+                  Salvar conta
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       </div>
     );
@@ -6700,237 +7563,58 @@ export function FinanceApp() {
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
-        <div className="w-full max-w-3xl rounded-[30px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-xs uppercase tracking-[0.24em] text-sky-600">Nova conta</p>
-              <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                Adicionar conta ou divida
-              </h3>
-            </div>
-            <button
-              type="button"
-              onClick={closeNewAccountModal}
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-600 transition hover:bg-slate-200"
-            >
-              ×
-            </button>
-          </div>
-
-          <form onSubmit={handleSaveNewAccount} className="mt-6 space-y-4">
-            <FormField label="Tipo">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <button
-                  type="button"
-                  onClick={() => setNewAccountKind("bill")}
-                  className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition ${
-                    newAccountKind === "bill"
-                      ? "border-slate-900 bg-slate-900 text-white"
-                      : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
-                  }`}
-                >
-                  Conta a pagar
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setNewAccountKind("debt")}
-                  className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition ${
-                    newAccountKind === "debt"
-                      ? "border-slate-900 bg-slate-900 text-white"
-                      : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
-                  }`}
-                >
-                  Divida
-                </button>
+        <div className="w-full max-w-2xl overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
+          <div className="flex max-h-[88vh] flex-col">
+            <div className="flex items-start justify-between gap-4 px-6 pt-6">
+              <div>
+                <p className="text-xs uppercase tracking-[0.24em] text-sky-600">Nova conta</p>
+                <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                  Adicionar conta ou divida
+                </h3>
               </div>
-            </FormField>
+              <button
+                type="button"
+                onClick={closeNewAccountModal}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-base font-semibold text-slate-600 transition hover:bg-slate-200"
+                aria-label="Fechar modal"
+              >
+                x
+              </button>
+            </div>
 
-            {newAccountKind === "bill" ? (
-              <>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <FormField label="Titulo">
-                    <input
-                      value={draftBill.title}
-                      onChange={(event) => setDraftBill((current) => ({ ...current, title: event.target.value }))}
-                      className="field"
-                    />
-                  </FormField>
-                  <FormField label="Valor">
-                    <input
-                      value={draftBill.amount}
-                      onChange={(event) => setDraftBill((current) => ({ ...current, amount: event.target.value }))}
-                      inputMode="decimal"
-                      className="field"
-                    />
-                  </FormField>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <FormField label="Categoria">
-                    <select
-                      value={draftBill.categoryId}
-                      onChange={(event) => setDraftBill((current) => ({ ...current, categoryId: event.target.value }))}
-                      className="field"
+            <form onSubmit={handleSaveNewAccount} className="flex min-h-0 flex-1 flex-col">
+              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+                <FormField label="Tipo">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => setNewAccountKind("bill")}
+                      className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition ${
+                        newAccountKind === "bill"
+                          ? "border-slate-900 bg-slate-900 text-white"
+                          : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
+                      }`}
                     >
-                      {categories.filter((category) => category.type === "expense").map((category) => (
-                        <option key={category.id} value={category.id}>
-                          {category.name}
-                        </option>
-                      ))}
-                    </select>
-                  </FormField>
-                  <FormField label="Vencimento">
-                    <input
-                      type="date"
-                      value={draftBill.dueDate}
-                      onChange={(event) => setDraftBill((current) => ({ ...current, dueDate: event.target.value }))}
-                      className="field"
-                    />
-                  </FormField>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-4">
-                  <FormField label="Prioridade">
-                    <select
-                      value={draftBill.priority}
-                      onChange={(event) =>
-                        setDraftBill((current) => ({ ...current, priority: event.target.value as FinancePriority }))
-                      }
-                      className="field"
+                      Conta a pagar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewAccountKind("debt")}
+                      className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition ${
+                        newAccountKind === "debt"
+                          ? "border-slate-900 bg-slate-900 text-white"
+                          : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
+                      }`}
                     >
-                      {planningPriorityOptions.map((priority) => (
-                        <option key={priority} value={priority}>
-                          {priority}
-                        </option>
-                      ))}
-                    </select>
-                  </FormField>
-                  <FormField label="Status">
-                    <select
-                      value={draftBill.status}
-                      onChange={(event) =>
-                        setDraftBill((current) => ({ ...current, status: event.target.value as DraftBill["status"] }))
-                      }
-                      className="field"
-                    >
-                      <option value="pending">Pendente</option>
-                      <option value="paid">Paga</option>
-                      <option value="overdue">Atrasada</option>
-                    </select>
-                  </FormField>
-                  <FormField label="Recorrente">
-                    <label className="flex h-[52px] items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={draftBill.isRecurring}
-                        onChange={(event) =>
-                          setDraftBill((current) => ({ ...current, isRecurring: event.target.checked }))
-                        }
-                      />
-                      Todo mes
-                    </label>
-                  </FormField>
-                  <FormField label="Dia mensal">
-                    <input
-                      value={draftBill.recurringDay}
-                      onChange={(event) =>
-                        setDraftBill((current) => ({ ...current, recurringDay: event.target.value }))
-                      }
-                      inputMode="numeric"
-                      disabled={!draftBill.isRecurring}
-                      className="field disabled:opacity-60"
-                    />
-                  </FormField>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <FormField label="Como pagar">
-                    <select
-                      value={draftBill.plannedPaymentMethod}
-                      onChange={(event) =>
-                        setDraftBill((current) => ({
-                          ...current,
-                          plannedPaymentMethod: event.target.value as PaymentPlanMethod,
-                        }))
-                      }
-                      className="field"
-                    >
-                      <option value="pix">Pix</option>
-                      <option value="cash">Dinheiro</option>
-                      <option value="bank_transfer">Transferencia</option>
-                      <option value="card">Cartao</option>
-                    </select>
-                  </FormField>
-                  {draftBill.plannedPaymentMethod === "card" ? (
-                    <>
-                      <FormField label="Cartao">
-                        <select
-                          value={draftBill.plannedCardId}
-                          onChange={(event) =>
-                            setDraftBill((current) => {
-                              const nextCard = cards.find((card) => card.id === event.target.value);
-                              const nextMode =
-                                nextCard?.availableMode === "both"
-                                  ? current.plannedCardMode
-                                  : nextCard?.availableMode ?? "credit";
-
-                              return {
-                                ...current,
-                                plannedCardId: event.target.value,
-                                plannedCardMode: nextMode,
-                              };
-                            })
-                          }
-                          className="field"
-                        >
-                          {cards.map((card) => (
-                            <option key={card.id} value={card.id}>
-                              {card.name}
-                            </option>
-                          ))}
-                        </select>
-                      </FormField>
-                      <FormField label="Modalidade">
-                        <select
-                          value={draftBill.plannedCardMode}
-                          onChange={(event) =>
-                            setDraftBill((current) => ({
-                              ...current,
-                              plannedCardMode: event.target.value as CardMode,
-                            }))
-                          }
-                          className="field"
-                        >
-                          {getDraftBillCardModes().map((mode) => (
-                            <option key={mode} value={mode}>
-                              {mode === "credit" ? "Credito" : "Debito"}
-                            </option>
-                          ))}
-                        </select>
-                      </FormField>
-                    </>
-                  ) : null}
-                </div>
-                {draftBill.plannedPaymentMethod === "card" && draftBill.plannedCardMode === "credit" ? (
-                  <FormField label="Parcelas">
-                    <input
-                      value={draftBill.installments}
-                      onChange={(event) =>
-                        setDraftBill((current) => ({ ...current, installments: event.target.value }))
-                      }
-                      inputMode="numeric"
-                      className="field"
-                    />
-                  </FormField>
-                ) : null}
-                <FormField label="Observacao">
-                  <textarea
-                    value={draftBill.notes}
-                    onChange={(event) => setDraftBill((current) => ({ ...current, notes: event.target.value }))}
-                    rows={3}
-                    className="field resize-none"
-                  />
+                      Divida
+                    </button>
+                  </div>
                 </FormField>
-              </>
-            ) : (
-              <>
+
+                {newAccountKind === "bill" ? (
+                  renderBillFormFields("create")
+                ) : (
+                  <>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <FormField label="Nome">
                     <input
@@ -6991,35 +7675,7 @@ export function FinanceApp() {
                     />
                   </FormField>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <FormField label="Prioridade">
-                    <select
-                      value={draftDebt.priority}
-                      onChange={(event) =>
-                        setDraftDebt((current) => ({ ...current, priority: event.target.value as FinancePriority }))
-                      }
-                      className="field"
-                    >
-                      {planningPriorityOptions.map((priority) => (
-                        <option key={priority} value={priority}>
-                          {priority}
-                        </option>
-                      ))}
-                    </select>
-                  </FormField>
-                  <FormField label="Status">
-                    <select
-                      value={draftDebt.status}
-                      onChange={(event) =>
-                        setDraftDebt((current) => ({ ...current, status: event.target.value as DraftDebt["status"] }))
-                      }
-                      className="field"
-                    >
-                      <option value="active">Ativa</option>
-                      <option value="paused">Pausada</option>
-                      <option value="settled">Quitada</option>
-                    </select>
-                  </FormField>
+                <div className="grid gap-3 sm:grid-cols-1">
                   <FormField label="Como pagar">
                     <select
                       value={draftDebt.plannedPaymentMethod}
@@ -7055,25 +7711,27 @@ export function FinanceApp() {
                     </select>
                   </FormField>
                 ) : null}
-              </>
-            )}
+                  </>
+                )}
+              </div>
 
-            <div className="flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={closeNewAccountModal}
-                className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                Cancelar
-              </button>
-              <button
-                type="submit"
-                className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
-              >
-                Salvar conta
-              </button>
-            </div>
-          </form>
+              <div className="flex shrink-0 justify-end gap-3 border-t border-slate-200/80 bg-white px-6 py-4">
+                <button
+                  type="button"
+                  onClick={closeNewAccountModal}
+                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
+                >
+                  Salvar conta
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       </div>
     );
@@ -7097,7 +7755,7 @@ export function FinanceApp() {
               </h3>
             </div>
             <button type="button" onClick={closeDebtModal} className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-600 transition hover:bg-slate-200">
-              Ã—
+              x
             </button>
           </div>
           <form onSubmit={handleSaveDebt} className="mt-6 space-y-4">
@@ -7166,6 +7824,157 @@ export function FinanceApp() {
     );
   }
 
+  function renderDebtPlanModal() {
+    if (!isDebtPlanModalOpen) {
+      return null;
+    }
+
+    const debt = debts.find((item) => item.id === draftDebtPlan.debtId);
+    if (!debt) {
+      return null;
+    }
+
+    const remainingAmount = Math.max(0, debt.remainingAmount);
+    const monthCount = Math.max(1, Number(draftDebtPlan.monthCount.replace(",", ".")) || 1);
+    const installmentAmount = Math.max(
+      0.01,
+      Number(draftDebtPlan.installmentAmount.replace(",", ".")) || debt.installmentAmount || 0.01,
+    );
+    const configuredMonthlyCap = Math.max(0, settings.monthlyDebtPaymentCap);
+    const preview = buildDebtPlanSchedule(
+      selectedMonth,
+      remainingAmount,
+      monthCount,
+      installmentAmount,
+    );
+    const paymentDetails = getPlannedPaymentDetails(
+      debt.plannedPaymentMethod,
+      debt.plannedCardId,
+      "credit",
+      cards,
+    );
+    const plannedCardName = debt.plannedCardId
+      ? cards.find((card) => card.id === debt.plannedCardId)?.name
+      : undefined;
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+        <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
+          <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] text-sky-600">Planejamento da divida</p>
+              <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{debt.name}</h3>
+            </div>
+            <button
+              type="button"
+              onClick={closeDebtPlanModal}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-base font-semibold text-slate-600 transition hover:bg-slate-200"
+              aria-label="Fechar modal"
+            >
+              x
+            </button>
+          </div>
+
+          <form onSubmit={handleApplyDebtPlan} className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <InfoBlock label="Total da divida" value={formatCurrency(debt.totalAmount)} />
+                <InfoBlock label="Ja pago" value={formatCurrency(debt.paidAmount)} />
+                <InfoBlock label="Restante" value={formatCurrency(debt.remainingAmount)} />
+                <InfoBlock label="Pagamento" value={paymentDetails.label} />
+              </div>
+
+              {plannedCardName ? (
+                <div className="rounded-[24px] border border-sky-100 bg-sky-50 px-4 py-4 text-sm text-sky-800">
+                  Cartao vinculado: <span className="font-semibold">{plannedCardName}</span>
+                </div>
+              ) : null}
+
+              <div className="rounded-[24px] border border-amber-100 bg-amber-50 px-4 py-4 text-sm text-amber-900">
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-700">
+                  Teto mensal definido nas configuracoes
+                </p>
+                <p className="mt-2 text-lg font-semibold">
+                  {configuredMonthlyCap > 0 ? formatCurrency(configuredMonthlyCap) : "Nao definido"}
+                </p>
+                <p className="mt-2 text-xs text-amber-800">
+                  Esse valor vira a sugestao automatica do plano. Se quiser, voce pode ajustar por meses ou por
+                  parcela aqui.
+                </p>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <FormField label="Quantidade de meses">
+                  <input
+                    value={draftDebtPlan.monthCount}
+                    onChange={(event) =>
+                      applyDebtPlanFromMonthCount(debt.id, event.target.value)
+                    }
+                    inputMode="numeric"
+                    className="field"
+                  />
+                </FormField>
+                <FormField label="Valor por parcela">
+                  <input
+                    value={draftDebtPlan.installmentAmount}
+                    onChange={(event) =>
+                      applyDebtPlanFromInstallment(debt.id, event.target.value)
+                    }
+                    inputMode="decimal"
+                    className="field"
+                  />
+                </FormField>
+              </div>
+
+              <div className="rounded-[28px] border border-slate-200 bg-slate-50 px-4 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">Previa do planejamento</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Ao confirmar, essa distribuicao vai direto para `Dividas e repasses` na planilha.
+                    </p>
+                  </div>
+                  <div className="rounded-full bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    {preview.schedule.length} meses
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {preview.schedule.map((item) => (
+                    <div key={item.monthValue} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                      <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">
+                        {formatMonthLabel(monthValueToDate(item.monthValue))}
+                      </p>
+                      <p className="mt-2 text-lg font-semibold text-slate-900">
+                        {formatCurrency(item.amount)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex shrink-0 justify-end gap-3 border-t border-slate-100 px-6 py-5">
+              <button
+                type="button"
+                onClick={closeDebtPlanModal}
+                className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
+              >
+                Aplicar na planilha
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   function renderAccountModal() {
     if (!isAccountModalOpen) {
       return null;
@@ -7184,7 +7993,7 @@ export function FinanceApp() {
               </h3>
             </div>
             <button type="button" onClick={closeAccountModal} className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-600 transition hover:bg-slate-200">
-              Ã—
+              x
             </button>
           </div>
           <form onSubmit={handleSaveAccount} className="mt-6 space-y-4">
@@ -7232,7 +8041,7 @@ export function FinanceApp() {
               className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-600 transition hover:bg-slate-200"
               aria-label="Fechar modal"
             >
-              Ã—
+              x
             </button>
           </div>
 
@@ -7535,11 +8344,10 @@ export function FinanceApp() {
               />
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-              <Panel title="Compras ativas" description="">
+            <Panel title="Compras ativas" description="">
                 <div className="space-y-3">
                   {activePlannedPurchases.length ? (
-                    activePlannedPurchases.slice(0, 6).map((purchase) => {
+                    activePlannedPurchases.map((purchase) => {
                       const remaining = Math.max(0, purchase.estimatedValue - purchase.savedAmount);
                       return (
                         <div
@@ -7553,8 +8361,11 @@ export function FinanceApp() {
                                 {formatCurrency(purchase.savedAmount)} guardados de{" "}
                                 {formatCurrency(purchase.estimatedValue)}
                               </p>
+                              <p className="mt-2 text-xs font-semibold uppercase tracking-[0.16em] text-sky-600">
+                                {getPurchasePlanningLabel(purchase)}
+                              </p>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
                               <PriorityPill priority={purchase.priority} />
                               <button
                                 type="button"
@@ -7562,6 +8373,20 @@ export function FinanceApp() {
                                 className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
                               >
                                 Editar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeletePurchase(purchase.id)}
+                                className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+                              >
+                                Excluir
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setPlanningScreen("board")}
+                                className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-700"
+                              >
+                                Abrir quadro
                               </button>
                             </div>
                           </div>
@@ -7588,38 +8413,6 @@ export function FinanceApp() {
                   )}
                 </div>
               </Panel>
-
-              <Panel title="Prioridades atuais" description="">
-                <div className="space-y-3">
-                  {urgentPlannedPurchases.length ? (
-                    urgentPlannedPurchases.slice(0, 4).map((purchase) => (
-                      <div
-                        key={purchase.id}
-                        className="rounded-[24px] border border-amber-100 bg-amber-50 px-4 py-4"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-slate-900">{purchase.name}</p>
-                            <p className="mt-1 text-xs text-slate-500">
-                              {getPurchasePlanningLabel(purchase)}
-                            </p>
-                          </div>
-                          <PriorityPill priority={purchase.priority} />
-                        </div>
-                        <p className="mt-3 text-sm text-slate-600">
-                          Meta {formatCurrency(purchase.estimatedValue)} · prazo{" "}
-                          {purchase.desiredDate ? formatShortDate(purchase.desiredDate) : "aberto"}
-                        </p>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                      Nenhum item urgente agora.
-                    </div>
-                  )}
-                </div>
-              </Panel>
-            </div>
           </div>
         ) : null}
 
@@ -7629,7 +8422,7 @@ export function FinanceApp() {
               <div className="space-y-3">
                 {activePlannedPurchases.length ? (
                   activePlannedPurchases.map((purchase) => {
-                    const remaining = Math.max(0, purchase.estimatedValue - purchase.savedAmount);
+                    const reservePlan = getReserveMonthlyPlan(purchase);
                     return (
                       <div
                         key={purchase.id}
@@ -7649,10 +8442,10 @@ export function FinanceApp() {
                             <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                               <InfoBlock label="Alvo" value={formatCurrency(purchase.estimatedValue)} />
                               <InfoBlock label="Reservado" value={formatCurrency(purchase.savedAmount)} />
-                              <InfoBlock label="Falta" value={formatCurrency(remaining)} />
+                              <InfoBlock label="Falta" value={formatCurrency(reservePlan.remaining)} />
                               <InfoBlock
-                                label="Planejado"
-                                value={getPurchasePlanningLabel(purchase)}
+                                label="Parcela mensal"
+                                value={formatCurrency(reservePlan.suggestedMonthlyAmount)}
                               />
                             </div>
                           </div>
@@ -7660,6 +8453,9 @@ export function FinanceApp() {
                             <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Prazo</p>
                             <p className="mt-2 text-sm font-semibold text-slate-900">
                               {purchase.desiredDate ? formatShortDate(purchase.desiredDate) : "Sem data"}
+                            </p>
+                            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                              {reservePlan.monthCount} meses ate {formatMonthLabel(monthValueToDate(reservePlan.targetMonth))}
                             </p>
                             <div className="mt-4">
                               <ProgressBar
@@ -7772,7 +8568,7 @@ export function FinanceApp() {
                               <p className="text-sm font-semibold text-slate-900">{investment.name}</p>
                               <p className="mt-1 text-sm text-slate-500">
                                 {investment.type}
-                                {investment.objective ? ` · ${investment.objective}` : ""}
+                                {investment.objective ? ` Â· ${investment.objective}` : ""}
                               </p>
                             </div>
                             <div className="flex flex-wrap gap-2">
@@ -7947,7 +8743,7 @@ export function FinanceApp() {
           </div>
 
           <Panel title="Meses da fatura" description="Passe pelos meses e veja o que estava dentro de cada fechamento.">
-            <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+            <div className="flex gap-3 overflow-x-auto pb-2">
               {selectedCardStatementMonths.map((monthValue) => {
                 const total = transactions
                   .filter(
@@ -7963,7 +8759,7 @@ export function FinanceApp() {
                     key={monthValue}
                     type="button"
                     onClick={() => setSelectedCardStatementMonth(monthValue)}
-                    className={`rounded-[24px] border px-4 py-4 text-left transition ${
+                    className={`min-w-[172px] rounded-[24px] border px-4 py-4 text-left transition ${
                       monthValue === selectedCardStatementMonth
                         ? "border-slate-900 bg-slate-900 text-white"
                         : "border-slate-200 bg-white hover:-translate-y-0.5"
@@ -8061,6 +8857,36 @@ export function FinanceApp() {
               </Panel>
 
               <Panel
+                title="Fixos no cartao"
+                description="Itens recorrentes que entram como detalhe desta fatura."
+              >
+                <div className="space-y-3">
+                  {selectedCardFixedItems.length ? (
+                    selectedCardFixedItems.map((entry) => (
+                      <div
+                        key={entry.id}
+                        className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{entry.title}</p>
+                            <p className="mt-1 text-sm text-slate-500">{entry.categoryName}</p>
+                          </div>
+                          <p className="text-sm font-semibold text-slate-900">
+                            {formatCurrency(entry.amountByMonth[selectedCardStatementMonth] ?? 0)}
+                          </p>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-600">
+                      Nenhum fixo recorrente entrou nessa fatura.
+                    </div>
+                  )}
+                </div>
+              </Panel>
+
+              <Panel
                 title="Resumo da fatura"
                 description="Aqui fica o controle rapido do limite usado e do valor que vai para contas a pagar."
               >
@@ -8101,15 +8927,15 @@ export function FinanceApp() {
       <div className="space-y-4">
         <div className="grid gap-4 xl:grid-cols-[1.08fr_0.92fr]">
             <Panel
-              title="Cartoes e faturas"
-              description="Cadastro vivo dos bancos, bandeiras, modalidades e datas."
+              title="Cartoes"
+              description="Cadastro vivo dos bancos, bandeiras, modalidades, limites e datas."
             action={
               <button
                 type="button"
                 onClick={() => openCardModal()}
                 className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
               >
-                Adicionar novo cartao
+                Novo cartao
               </button>
             }
           >
@@ -8337,7 +9163,6 @@ export function FinanceApp() {
       { id: "overview" as const, label: "Visao geral" },
       { id: "recurring" as const, label: "Contas recorrentes" },
       { id: "debts" as const, label: "Dividas" },
-      { id: "cards" as const, label: "Cartoes e faturas" },
     ];
 
     const accountsToolbar = (
@@ -8375,26 +9200,8 @@ export function FinanceApp() {
         >
           Nova divida
         </button>
-        <button
-          type="button"
-          onClick={() => openCardModal()}
-          className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-        >
-          Novo cartao
-        </button>
       </div>
     );
-
-    if (accountsSection === "cards") {
-      return (
-        <div className="space-y-4">
-          <Panel title="Contas" description="" action={accountsQuickActions}>
-            {accountsToolbar}
-          </Panel>
-          {renderCardsWorkspace()}
-        </div>
-      );
-    }
 
     return (
       <div className="space-y-4">
@@ -8430,7 +9237,7 @@ export function FinanceApp() {
                       <div>
                         <p className="text-sm font-semibold text-slate-900">{item.bill.title}</p>
                         <p className="mt-1 text-sm text-slate-500">
-                          {item.bill.categoryName} - vence {formatShortDate(item.bill.dueDate)}
+                          {getBillCategoryDisplayName(item.bill)} - vence {formatShortDate(item.bill.dueDate)}
                         </p>
                       </div>
                       <p className="text-sm font-semibold text-slate-900">{formatCurrency(item.bill.amount)}</p>
@@ -8472,242 +9279,233 @@ export function FinanceApp() {
                   Ver dividas
                 </button>
               </Panel>
-
-              <Panel title="Cartoes e faturas" description="">
-                <div className="space-y-3">
-                  {cardSummaries.slice(0, 2).map((card) => (
-                    <button
-                      key={card.id}
-                      type="button"
-                      onClick={() => openCardDetails(card.id)}
-                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-4 text-left transition hover:bg-slate-50"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">{card.name}</p>
-                          <p className="mt-1 text-sm text-slate-500">
-                            Fatura {formatCurrency(card.creditUsed)} - limite {formatCurrency(card.creditLimit)}
-                          </p>
-                        </div>
-                        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                          abrir
-                        </span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setAccountsSection("cards")}
-                  className="mt-4 rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Ver cartoes
-                </button>
-              </Panel>
             </div>
           </div>
         ) : accountsSection === "recurring" ? (
-          <div className="grid gap-4 xl:grid-cols-[1.08fr_0.92fr]">
-            <Panel title="Contas recorrentes e vencimentos" description="">
-              <div className="space-y-3">
-                {billsForDisplay.map((item) => {
-                  const bill = item.bill;
+          <Panel title="Contas recorrentes e vencimentos" description="">
+            <div className="space-y-3">
+              {billsForDisplay.map((item) => {
+                const bill = item.bill;
 
-                  return (
-                    <div
-                      key={bill.id}
-                      className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-[0_18px_42px_rgba(15,23,42,0.04)]"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <p className="text-sm font-semibold text-slate-900">{bill.title}</p>
-                            <PriorityPill priority={bill.priority} />
-                            {item.source === "card_auto" ? (
-                              <span className="rounded-full bg-sky-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
-                                Auto
-                              </span>
-                            ) : null}
-                          </div>
-                          <p className="mt-1 text-sm text-slate-500">
-                            {bill.categoryName} - vence {formatShortDate(bill.dueDate)}
-                          </p>
-                          {item.source === "card_auto" ? (
-                            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">
-                              Gerada pelo cartao de credito - fatura de {formatMonthLabel(monthValueToDate(item.statementMonth))}
-                            </p>
-                          ) : bill.plannedPaymentMethod ? (
-                            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">
-                              Pagamento planejado: {getPlannedPaymentDetails(
-                                bill.plannedPaymentMethod,
-                                bill.plannedCardId,
-                                bill.plannedCardMode ?? "credit",
-                                cards,
-                              ).label}
-                            </p>
-                          ) : null}
-                          {item.source === "manual" && bill.isRecurring ? (
-                            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-violet-600">
-                              Recorrente todo dia {String(bill.recurringDay ?? Number(bill.dueDate.slice(8, 10))).padStart(2, "0")}
-                            </p>
-                          ) : null}
-                          {item.source === "manual" && isCreditLinkedBill(bill) && (bill.installments ?? 1) > 1 ? (
-                            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                              {(bill.installments ?? 1)} parcelas vinculadas ao cartao
-                            </p>
-                          ) : null}
-                          {bill.notes ? <p className="mt-2 text-sm text-slate-500">{bill.notes}</p> : null}
-                        </div>
-                        <div className="text-right">
-                          <p className="text-lg font-semibold text-slate-900">{formatCurrency(bill.amount)}</p>
-                          <p
-                            className={`mt-1 text-xs font-semibold uppercase tracking-[0.24em] ${
-                              bill.status === "paid"
-                                ? "text-emerald-600"
-                                : bill.status === "overdue"
-                                  ? "text-red-500"
-                                  : "text-orange-500"
-                            }`}
-                          >
-                            {bill.status}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {item.source === "manual" ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => openBillModal(bill)}
-                              className="rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                            >
-                              Editar
-                            </button>
-                            {isCreditLinkedBill(bill) ? (
-                              <button
-                                type="button"
-                                onClick={() => openCardDetails(bill.plannedCardId ?? settings.defaultCardId, bill.dueDate.slice(0, 7))}
-                                className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
-                              >
-                                Abrir cartao
-                              </button>
-                            ) : bill.status !== "paid" ? (
-                              <button
-                                type="button"
-                                onClick={() => handlePayBill(bill.id)}
-                                className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
-                              >
-                                Marcar como paga
-                              </button>
-                            ) : null}
-                          </>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => openCardDetails(item.cardId, item.statementMonth)}
-                            className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
-                          >
-                            Abrir cartao
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </Panel>
-
-            <Panel title="Status financeiro" description="">
-              <SegmentBarChart items={billStatusItems} />
-            </Panel>
-          </div>
-        ) : (
-          <div className="grid gap-4 xl:grid-cols-[1.08fr_0.92fr]">
-            <Panel
-              title="Dividas e abatimentos"
-              description=""
-            >
-              <div className="space-y-3">
-                {debts.map((debt) => (
+                return (
                   <div
-                    key={debt.id}
+                    key={bill.id}
                     className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-[0_18px_42px_rgba(15,23,42,0.04)]"
                   >
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
                         <div className="flex items-center gap-2">
-                          <p className="text-sm font-semibold text-slate-900">{debt.name}</p>
-                          <PriorityPill priority={debt.priority} />
+                          <p className="text-sm font-semibold text-slate-900">{bill.title}</p>
+                          <PriorityPill priority={bill.priority} />
+                          {item.source === "card_auto" ? (
+                            <span className="rounded-full bg-sky-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+                              Auto
+                            </span>
+                          ) : null}
                         </div>
                         <p className="mt-1 text-sm text-slate-500">
-                          Proximo pagamento em {formatShortDate(debt.nextDueDate)}
+                          {getBillCategoryDisplayName(bill)} - vence {formatShortDate(bill.dueDate)}
                         </p>
-                        {debt.description ? <p className="mt-2 text-sm text-slate-500">{debt.description}</p> : null}
-                        {debt.plannedPaymentMethod ? (
+                        {item.source === "card_auto" ? (
                           <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">
-                            Forma planejada: {getPlannedPaymentDetails(
-                              debt.plannedPaymentMethod,
-                              debt.plannedCardId,
-                              "credit",
+                            Gerada pelo cartao de credito - fatura de {formatMonthLabel(monthValueToDate(item.statementMonth))}
+                          </p>
+                        ) : bill.plannedPaymentMethod ? (
+                          <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">
+                            Pagamento planejado: {getPlannedPaymentDetails(
+                              bill.plannedPaymentMethod,
+                              bill.plannedCardId,
+                              bill.plannedCardMode ?? "credit",
                               cards,
                             ).label}
                           </p>
                         ) : null}
+                        {item.source === "manual" && bill.isRecurring ? (
+                          <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-violet-600">
+                            Recorrente todo dia {String(bill.recurringDay ?? Number(bill.dueDate.slice(8, 10))).padStart(2, "0")}
+                          </p>
+                        ) : null}
+                        {item.source === "manual" && isCreditLinkedBill(bill) && (bill.installments ?? 1) > 1 ? (
+                          <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                            {(bill.installments ?? 1)} parcelas vinculadas ao cartao
+                          </p>
+                        ) : null}
+                        {bill.notes ? <p className="mt-2 text-sm text-slate-500">{bill.notes}</p> : null}
                       </div>
                       <div className="text-right">
-                        <p className="text-lg font-semibold text-slate-900">{formatCurrency(debt.remainingAmount)}</p>
-                        <p className="mt-1 text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
-                          restante
+                        <p className="text-lg font-semibold text-slate-900">{formatCurrency(bill.amount)}</p>
+                        <p
+                          className={`mt-1 text-xs font-semibold uppercase tracking-[0.24em] ${
+                            bill.status === "paid"
+                              ? "text-emerald-600"
+                              : bill.status === "overdue"
+                                ? "text-red-500"
+                                : "text-orange-500"
+                          }`}
+                        >
+                          {bill.status}
                         </p>
                       </div>
                     </div>
-                    <div className="mt-4">
-                      <div className="mb-2 flex items-center justify-between text-sm text-slate-500">
-                        <span>Pago ate agora</span>
-                        <span>{Math.round((debt.paidAmount / debt.totalAmount) * 100)}%</span>
-                      </div>
-                      <ProgressBar value={debt.paidAmount / debt.totalAmount} />
-                    </div>
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                      <InfoBlock label="Total" value={formatCurrency(debt.totalAmount)} />
-                      <InfoBlock label="Abatimento sugerido" value={formatCurrency(debt.installmentAmount)} />
-                    </div>
                     <div className="mt-4 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => openDebtModal(debt)}
-                        className="rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                      >
-                        Editar
-                      </button>
-                      {debt.status === "active" ? (
+                      {item.source === "manual" ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => openBillModal(bill)}
+                            className="rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                          >
+                            Editar
+                          </button>
+                          {isCreditLinkedBill(bill) ? (
+                            <button
+                              type="button"
+                              onClick={() => openCardDetails(bill.plannedCardId ?? settings.defaultCardId, bill.dueDate.slice(0, 7))}
+                              className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
+                            >
+                              Abrir cartao
+                            </button>
+                          ) : bill.status !== "paid" ? (
+                            <button
+                              type="button"
+                              onClick={() => handlePayBill(bill.id)}
+                              className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
+                            >
+                              Marcar como paga
+                            </button>
+                          ) : null}
+                        </>
+                      ) : (
                         <button
                           type="button"
-                          onClick={() => handleDebtAdvance(debt.id)}
+                          onClick={() => openCardDetails(item.cardId, item.statementMonth)}
                           className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
                         >
-                          Registrar abatimento
+                          Abrir cartao
                         </button>
-                      ) : (
-                        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
-                          Divida quitada.
-                        </div>
                       )}
                     </div>
                   </div>
-                ))}
-              </div>
-            </Panel>
-
-            <Panel title="Status financeiro" description="">
-              <SegmentBarChart items={billStatusItems} />
-            </Panel>
-          </div>
+                );
+              })}
+            </div>
+          </Panel>
+        ) : (
+          <Panel
+            title="Dividas e abatimentos"
+            description=""
+          >
+            <div className="space-y-3">
+              {debts.map((debt) => (
+                <div
+                  key={debt.id}
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-[0_18px_42px_rgba(15,23,42,0.04)]"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-slate-900">{debt.name}</p>
+                        <PriorityPill priority={debt.priority} />
+                      </div>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Proximo pagamento em {formatShortDate(debt.nextDueDate)}
+                      </p>
+                      {debt.description ? <p className="mt-2 text-sm text-slate-500">{debt.description}</p> : null}
+                      {debt.plannedPaymentMethod ? (
+                        <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">
+                          Forma planejada: {getPlannedPaymentDetails(
+                            debt.plannedPaymentMethod,
+                            debt.plannedCardId,
+                            "credit",
+                            cards,
+                          ).label}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-lg font-semibold text-slate-900">{formatCurrency(debt.remainingAmount)}</p>
+                      <p className="mt-1 text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
+                        restante
+                      </p>
+                    </div>
+                  </div>
+                  <div className="mt-4">
+                    <div className="mb-2 flex items-center justify-between text-sm text-slate-500">
+                      <span>Pago ate agora</span>
+                      <span>{Math.round((debt.paidAmount / debt.totalAmount) * 100)}%</span>
+                    </div>
+                    <ProgressBar value={debt.paidAmount / debt.totalAmount} />
+                  </div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <InfoBlock label="Total" value={formatCurrency(debt.totalAmount)} />
+                    <InfoBlock label="Abatimento sugerido" value={formatCurrency(debt.installmentAmount)} />
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openDebtModal(debt)}
+                      className="rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Editar
+                    </button>
+                    {debt.remainingAmount > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => openDebtPlanModal(debt)}
+                        className="rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+                      >
+                        Planejar pagamento
+                      </button>
+                    ) : null}
+                    {debt.status === "active" ? (
+                      <button
+                        type="button"
+                        onClick={() => handleDebtAdvance(debt.id)}
+                        className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
+                      >
+                        Registrar abatimento
+                      </button>
+                    ) : (
+                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
+                        Divida quitada.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Panel>
         )}
 
         {renderNewAccountModal()}
         {renderBillModal()}
         {renderDebtModal()}
+        {renderDebtPlanModal()}
+      </div>
+    );
+  }
+
+  function renderCardsHomeTab() {
+    return (
+      <div className="space-y-4">
+        <Panel
+          title="Cartoes"
+          description=""
+          action={
+            <button
+              type="button"
+              onClick={() => openCardModal()}
+              className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
+            >
+              Novo cartao
+            </button>
+          }
+        >
+          <p className="text-sm text-slate-500">
+            Cadastre, acompanhe limites, faturas, parcelas e balances dos seus cartoes em uma area propria.
+          </p>
+        </Panel>
+        {renderCardsWorkspace()}
       </div>
     );
   }
@@ -8716,11 +9514,11 @@ export function FinanceApp() {
     switch (section) {
       case "cashflow":
         return {
-          title: "Entradas e saídas",
+          title: "Entradas e saidas",
           headers: ["Indicador", "Valor"],
           rows: [
-            ["Entradas do mês", monthSummary.receivedIncome + monthSummary.variableIncome],
-            ["Saídas pagas", monthSummary.paidExpenses],
+            ["Entradas do mes", monthSummary.receivedIncome + monthSummary.variableIncome],
+            ["Saidas pagas", monthSummary.paidExpenses],
             ["Resultado", monthSummary.remainingMonth],
             ["Contas em aberto", monthSummary.pendingBills],
           ],
@@ -8739,19 +9537,19 @@ export function FinanceApp() {
         };
       case "monthly-trend":
         return {
-          title: "Evolução mensal",
-          headers: ["Mês", "Entradas", "Saídas", "Resultado"],
+          title: "Evolucao mensal",
+          headers: ["Mes", "Entradas", "Saidas", "Resultado"],
           rows: monthlyTrend.map((item) => [item.label, item.income, item.expenses, item.result]),
         };
       case "exports":
         return {
-          title: "Exportação",
-          headers: ["Seção", "Status"],
+          title: "Exportacao",
+          headers: ["Secao", "Status"],
           rows: [
-            ["Entradas e saídas", "Disponível"],
-            ["Categorias", "Disponível"],
-            ["Pagamentos", "Disponível"],
-            ["Evolução mensal", "Disponível"],
+            ["Entradas e saidas", "Disponivel"],
+            ["Categorias", "Disponivel"],
+            ["Pagamentos", "Disponivel"],
+            ["Evolucao mensal", "Disponivel"],
           ],
         };
     }
@@ -9028,6 +9826,7 @@ export function FinanceApp() {
       { id: "main" as const, label: "Configuracoes principais" },
       { id: "salary" as const, label: "Salario fixo por mes" },
       { id: "categories" as const, label: "Categorias" },
+      { id: "banks" as const, label: "Bancos e cartoes" },
       { id: "accounts" as const, label: "Contas e carteiras" },
       { id: "security" as const, label: "Acesso e seguranca" },
     ];
@@ -9070,6 +9869,13 @@ export function FinanceApp() {
                     value={settings.monthlyInvestmentTarget}
                     onChange={(value) =>
                       setSettings((current) => ({ ...current, monthlyInvestmentTarget: value }))
+                    }
+                  />
+                  <ConfigField
+                    label="Teto mensal para dividas"
+                    value={settings.monthlyDebtPaymentCap}
+                    onChange={(value) =>
+                      setSettings((current) => ({ ...current, monthlyDebtPaymentCap: value }))
                     }
                   />
                   <ConfigField
@@ -9186,7 +9992,9 @@ export function FinanceApp() {
                 }
               >
                 <div className="space-y-3">
-                  {categories.map((category) => (
+                  {categories
+                    .filter((category) => !isHiddenUiCategoryId(category.id))
+                    .map((category) => (
                     <div key={category.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="flex items-center gap-3">
@@ -9201,6 +10009,93 @@ export function FinanceApp() {
                         <button
                           type="button"
                           onClick={() => openCategoryModal(category)}
+                          className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                        >
+                          Editar
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Panel>
+            ) : null}
+
+            {settingsSection === "banks" ? (
+              <Panel
+                title="Bancos e cartoes"
+                description=""
+              >
+                <form onSubmit={handleSaveBankPreset} className="mb-5 grid gap-3 lg:grid-cols-[1fr_160px_110px_auto]">
+                  <FormField label="Banco">
+                    <input
+                      value={draftBankPreset.issuer}
+                      onChange={(event) =>
+                        setDraftBankPreset((current) => ({ ...current, issuer: event.target.value }))
+                      }
+                      placeholder="Ex.: Mercado Pago"
+                      className="field"
+                    />
+                  </FormField>
+                  <FormField label="Bandeira padrao">
+                    <select
+                      value={draftBankPreset.brand}
+                      onChange={(event) =>
+                        setDraftBankPreset((current) => ({ ...current, brand: event.target.value }))
+                      }
+                      className="field"
+                    >
+                      <option value="Mastercard">Mastercard</option>
+                      <option value="Visa">Visa</option>
+                      <option value="Elo">Elo</option>
+                      <option value="American Express">American Express</option>
+                    </select>
+                  </FormField>
+                  <FormField label="Cor">
+                    <input
+                      type="color"
+                      value={draftBankPreset.color}
+                      onChange={(event) =>
+                        setDraftBankPreset((current) => ({ ...current, color: event.target.value }))
+                      }
+                      className="field h-12"
+                    />
+                  </FormField>
+                  <div className="flex items-end gap-2">
+                    <button
+                      type="submit"
+                      className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
+                    >
+                      {editingBankIssuer ? "Atualizar" : "Adicionar"}
+                    </button>
+                    {editingBankIssuer ? (
+                      <button
+                        type="button"
+                        onClick={closeBankPresetEditor}
+                        className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        Cancelar
+                      </button>
+                    ) : null}
+                  </div>
+                </form>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  {bankPresets.map((preset) => (
+                    <div key={preset.issuer} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <span
+                            className="h-8 w-8 rounded-full border border-slate-200"
+                            style={{ backgroundColor: preset.color }}
+                          />
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{preset.issuer}</p>
+                            <p className="mt-1 text-xs text-slate-500">{preset.brand}</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => openBankPresetEditor(preset)}
                           className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
                         >
                           Editar

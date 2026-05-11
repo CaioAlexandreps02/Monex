@@ -165,6 +165,8 @@ create table if not exists public.settings (
   default_card_id uuid references public.cards(id) on delete set null,
   fixed_salary_expected numeric(12, 2) not null default 0,
   monthly_investment_target numeric(12, 2) not null default 0,
+  monthly_debt_payment_cap numeric(12, 2) not null default 0,
+  bank_presets jsonb not null default '[]'::jsonb,
   week_start_day integer not null default 1,
   extra_income_goal numeric(12, 2) not null default 0,
   created_at timestamptz not null default now(),
@@ -203,6 +205,12 @@ create table if not exists public.monthly_plans (
   extra_income_goal numeric(12, 2) not null default 0,
   created_at timestamptz not null default now(),
   unique (user_id, month_value)
+);
+
+create table if not exists public.app_state (
+  key text primary key,
+  state jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
 );
 
 create table if not exists public.monthly_plan_category_budgets (

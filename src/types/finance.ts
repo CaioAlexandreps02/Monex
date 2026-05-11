@@ -63,6 +63,12 @@ export interface Card {
   isActive: boolean;
 }
 
+export interface BankPreset {
+  issuer: string;
+  color: string;
+  brand: string;
+}
+
 export interface Category {
   id: string;
   name: string;
@@ -192,6 +198,8 @@ export interface Investment {
 export interface Settings {
   fixedSalaryExpected: number;
   monthlyInvestmentTarget: number;
+  monthlyDebtPaymentCap: number;
+  bankPresets?: BankPreset[];
   defaultAccountId: string;
   defaultCardId: string;
   weekStartDay: number;
@@ -247,6 +255,7 @@ export interface FixedFlowEntry {
   cardId?: string;
   cardMode?: CardMode;
   linkedBillGroupId?: string;
+  linkedDebtId?: string;
   linkedInvestmentId?: string;
   syncCardLimit?: boolean;
   manualAmountMonths?: string[];
@@ -266,6 +275,7 @@ export interface MonthlyGridRow {
   cardId?: string;
   cardMode?: CardMode;
   linkedBillGroupId?: string;
+  linkedDebtId?: string;
   linkedInvestmentId?: string;
   syncCardLimit?: boolean;
   notes?: string;

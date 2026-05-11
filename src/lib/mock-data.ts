@@ -1,5 +1,6 @@
 import type {
   Account,
+  BankPreset,
   Bill,
   Card,
   Category,
@@ -166,6 +167,19 @@ export const cards: Card[] = [
     linkedAccountId: "acc-main",
     isActive: true,
   },
+];
+
+export const bankPresets: BankPreset[] = [
+  { issuer: "Nubank", color: "#7a2cff", brand: "Mastercard" },
+  { issuer: "C6 Bank", color: "#111111", brand: "Mastercard" },
+  { issuer: "Inter", color: "#ff7a00", brand: "Mastercard" },
+  { issuer: "Will Bank", color: "#f3c400", brand: "Mastercard" },
+  { issuer: "Banco do Brasil", color: "#f6d00f", brand: "Visa" },
+  { issuer: "Caixa", color: "#0a5bd8", brand: "Visa" },
+  { issuer: "Itau", color: "#ff6a00", brand: "Visa" },
+  { issuer: "Bradesco", color: "#c81d4f", brand: "Visa" },
+  { issuer: "Santander", color: "#e02424", brand: "Visa" },
+  { issuer: "PicPay", color: "#19c37d", brand: "Mastercard" },
 ];
 
 export const categories: Category[] = [
@@ -848,6 +862,8 @@ export const fixedFlowEntries: FixedFlowEntry[] = [
 export const settings: Settings = {
   fixedSalaryExpected: 2200,
   monthlyInvestmentTarget: 0,
+  monthlyDebtPaymentCap: 300,
+  bankPresets,
   defaultAccountId: "acc-main",
   defaultCardId: "card-nubank",
   weekStartDay: 1,
