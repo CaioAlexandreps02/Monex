@@ -7,9 +7,9 @@ import Image from "next/image";
 const priorityClasses: Record<string, string> = {
   "Urgente": "bg-red-50 text-red-600 ring-red-200",
   "Alta": "bg-orange-50 text-orange-600 ring-orange-200",
-  "MÃ©dia": "bg-sky-50 text-sky-600 ring-sky-200",
+  "Media": "bg-sky-50 text-sky-600 ring-sky-200",
   "Baixa": "bg-emerald-50 text-emerald-600 ring-emerald-200",
-  "AdiÃ¡vel": "bg-slate-100 text-slate-500 ring-slate-200",
+  "Adiavel": "bg-slate-100 text-slate-500 ring-slate-200",
 };
 
 export function NavigationRail({
@@ -339,7 +339,7 @@ export function TrendBars({
           </div>
           <div className="mt-4 space-y-3">
             <Bar label="Entradas" value={item.income} max={biggest} tone="positive" />
-            <Bar label="SaÃ­das" value={item.expenses} max={biggest} tone="negative" />
+            <Bar label="Saidas" value={item.expenses} max={biggest} tone="negative" />
           </div>
         </div>
       ))}

@@ -9502,7 +9502,7 @@ export function FinanceApp() {
           }
         >
           <p className="text-sm text-slate-500">
-            Cadastre, acompanhe limites, faturas, parcelas e balances dos seus cartoes em uma area propria.
+            Cadastre, acompanhe limites, faturas, parcelas e balancos dos seus cartoes em uma area propria.
           </p>
         </Panel>
         {renderCardsWorkspace()}
