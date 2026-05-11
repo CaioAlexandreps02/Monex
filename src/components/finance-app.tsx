@@ -364,6 +364,8 @@ type FinancePersistedCache = {
   updatedAt: string | null;
 };
 
+type RemoteSaveStatus = "loading" | "saved" | "saving" | "error";
+
 const initialDraftTransaction: DraftTransaction = {
   title: "",
   type: "expense",
@@ -811,6 +813,9 @@ export function FinanceApp() {
   const [isAlertsPanelOpen, setIsAlertsPanelOpen] = useState(false);
   const [hasLoadedPersistedState, setHasLoadedPersistedState] = useState(false);
   const [hasHydratedRemoteState, setHasHydratedRemoteState] = useState(false);
+  const [remoteSaveStatus, setRemoteSaveStatus] = useState<RemoteSaveStatus>("loading");
+  const [remoteSaveError, setRemoteSaveError] = useState<string | null>(null);
+  const [lastRemoteSavedAt, setLastRemoteSavedAt] = useState<string | null>(null);
   const [collapsedFixedSections, setCollapsedFixedSections] = useState<Record<FixedFlowSection, boolean>>({
     Ganhos: false,
     "Gastos fixos": false,
@@ -819,6 +824,10 @@ export function FinanceApp() {
   });
   const [expandedCardBillCells, setExpandedCardBillCells] = useState<Record<string, boolean>>({});
   const [isFixedClosingCollapsed, setIsFixedClosingCollapsed] = useState(true);
+  const remoteSaveInFlightRef = useRef(false);
+  const pendingRemoteSnapshotRef = useRef<FinancePersistedState | null>(null);
+  const remoteRetryTimeoutRef = useRef<number | null>(null);
+  const remoteRetryCountRef = useRef(0);
   const monthlyGridClickSuppressedUntilRef = useRef(0);
   const referenceMonthDate = monthValueToDate(selectedMonth);
   const deferredSearch = useDeferredValue(search);
@@ -936,6 +945,76 @@ export function FinanceApp() {
     if (persisted.monthlyPlansByMonth) setMonthlyPlansByMonth(persisted.monthlyPlansByMonth);
   }, []);
 
+  const saveStateToSupabase = useCallback(
+    async (snapshot: FinancePersistedState) => {
+      if (remoteSaveInFlightRef.current) {
+        pendingRemoteSnapshotRef.current = snapshot;
+        setRemoteSaveStatus("saving");
+        return;
+      }
+
+      if (remoteRetryTimeoutRef.current) {
+        window.clearTimeout(remoteRetryTimeoutRef.current);
+        remoteRetryTimeoutRef.current = null;
+      }
+
+      remoteSaveInFlightRef.current = true;
+      setRemoteSaveStatus("saving");
+      setRemoteSaveError(null);
+      let didSave = false;
+
+      try {
+        const response = await fetch("/api/app-state", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ state: snapshot }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => "");
+          throw new Error(errorText || `Supabase respondeu ${response.status}`);
+        }
+
+        const payload = (await response.json()) as { updatedAt?: string | null };
+        const savedAt = payload.updatedAt ?? new Date().toISOString();
+        writeLocalPersistedCache(snapshot, savedAt);
+        setLastRemoteSavedAt(savedAt);
+        setRemoteSaveStatus("saved");
+        setRemoteSaveError(null);
+        remoteRetryCountRef.current = 0;
+        didSave = true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Nao foi possivel salvar no Supabase.";
+        pendingRemoteSnapshotRef.current = pendingRemoteSnapshotRef.current ?? snapshot;
+        setRemoteSaveStatus("error");
+        setRemoteSaveError(message);
+
+        const retryDelay = Math.min(30000, 2000 * 2 ** remoteRetryCountRef.current);
+        remoteRetryCountRef.current += 1;
+        remoteRetryTimeoutRef.current = window.setTimeout(() => {
+          const pendingSnapshot = pendingRemoteSnapshotRef.current;
+          if (pendingSnapshot) {
+            pendingRemoteSnapshotRef.current = null;
+            void saveStateToSupabase(pendingSnapshot);
+          }
+        }, retryDelay);
+      } finally {
+        remoteSaveInFlightRef.current = false;
+
+        const pendingSnapshot = pendingRemoteSnapshotRef.current;
+        if (didSave && pendingSnapshot) {
+          pendingRemoteSnapshotRef.current = null;
+          window.setTimeout(() => {
+            void saveStateToSupabase(pendingSnapshot);
+          }, 0);
+        }
+      }
+    },
+    [writeLocalPersistedCache],
+  );
+
   useEffect(() => {
     if (activeView !== "home") {
       return;
@@ -970,6 +1049,8 @@ export function FinanceApp() {
       const localCache = parseLocalPersistedCache();
       const localState = localCache?.state ?? null;
       const localUpdatedAt = localCache?.updatedAt;
+      setRemoteSaveStatus("loading");
+      setRemoteSaveError(null);
 
       try {
         const response = await fetch("/api/app-state", {
@@ -998,23 +1079,13 @@ export function FinanceApp() {
 
             if (shouldPreferLocalState) {
               applyPersistedState(localState);
-              const syncResponse = await fetch("/api/app-state", {
-                method: "PUT",
-                headers: {
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify({ state: localState }),
-              }).catch(() => null);
-
-              if (syncResponse?.ok) {
-                const syncPayload = (await syncResponse.json()) as { updatedAt?: string | null };
-                writeLocalPersistedCache(localState, syncPayload.updatedAt ?? localUpdatedAt ?? null);
-              } else {
-                writeLocalPersistedCache(localState, localUpdatedAt ?? null);
-              }
+              pendingRemoteSnapshotRef.current = localState as FinancePersistedState;
+              writeLocalPersistedCache(localState, localUpdatedAt ?? null);
             } else {
               applyPersistedState(payload.state);
               writeLocalPersistedCache(payload.state, remoteUpdatedAt);
+              setLastRemoteSavedAt(remoteUpdatedAt);
+              setRemoteSaveStatus("saved");
             }
             return;
           }
@@ -1022,19 +1093,16 @@ export function FinanceApp() {
 
         if (localState) {
           applyPersistedState(localState);
-          const syncResponse = await fetch("/api/app-state", {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ state: localState }),
-          }).catch(() => undefined);
-
-          if (syncResponse?.ok) {
-            const syncPayload = (await syncResponse.json()) as { updatedAt?: string | null };
-            writeLocalPersistedCache(localState, syncPayload.updatedAt ?? localUpdatedAt ?? null);
-          }
+          pendingRemoteSnapshotRef.current = localState as FinancePersistedState;
+          writeLocalPersistedCache(localState, localUpdatedAt ?? null);
+        } else {
+          setRemoteSaveStatus("saved");
         }
+      } catch (error) {
+        setRemoteSaveStatus(localState ? "error" : "saved");
+        setRemoteSaveError(
+          error instanceof Error ? error.message : "Nao foi possivel carregar dados do Supabase.",
+        );
       } finally {
         if (!isCancelled) {
           setHasLoadedPersistedState(true);
@@ -1062,27 +1130,52 @@ export function FinanceApp() {
       return;
     }
 
-    const timeoutId = window.setTimeout(() => {
-      fetch("/api/app-state", {
+    void saveStateToSupabase(snapshot);
+  }, [
+    buildPersistedState,
+    hasHydratedRemoteState,
+    hasLoadedPersistedState,
+    saveStateToSupabase,
+    writeLocalPersistedCache,
+  ]);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState || !hasHydratedRemoteState) {
+      return;
+    }
+
+    function flushCurrentState() {
+      const snapshot = buildPersistedState();
+      writeLocalPersistedCache(snapshot);
+      void fetch("/api/app-state", {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ state: snapshot }),
-      })
-        .then(async (response) => {
-          if (!response.ok) {
-            return;
-          }
+        keepalive: true,
+      }).catch(() => undefined);
+    }
 
-          const payload = (await response.json()) as { updatedAt?: string | null };
-          writeLocalPersistedCache(snapshot, payload.updatedAt ?? null);
-        })
-        .catch(() => undefined);
-    }, 500);
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        flushCurrentState();
+      }
+    }
 
-    return () => window.clearTimeout(timeoutId);
-  }, [buildPersistedState, hasHydratedRemoteState, hasLoadedPersistedState, writeLocalPersistedCache]);
+    window.addEventListener("pagehide", flushCurrentState);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("pagehide", flushCurrentState);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [
+    buildPersistedState,
+    hasHydratedRemoteState,
+    hasLoadedPersistedState,
+    writeLocalPersistedCache,
+  ]);
 
   const autoCardBills = cards
     .filter((card) => card.availableMode !== "debit")
@@ -1169,6 +1262,32 @@ export function FinanceApp() {
     .sort()
     .reverse();
   const activeViewLabel = navItems.find((item) => item.id === activeView)?.label ?? "Home";
+  const remoteSaveLabel =
+    remoteSaveStatus === "loading"
+      ? "Conectando Supabase"
+      : remoteSaveStatus === "saving"
+        ? "Salvando no Supabase"
+        : remoteSaveStatus === "error"
+          ? "Erro ao salvar"
+          : "Salvo no Supabase";
+  const remoteSaveTone =
+    remoteSaveStatus === "error"
+      ? "border-red-200 bg-red-50 text-red-700"
+      : remoteSaveStatus === "saving" || remoteSaveStatus === "loading"
+        ? "border-amber-200 bg-amber-50 text-amber-700"
+        : "border-emerald-200 bg-emerald-50 text-emerald-700";
+  const remoteSaveDot =
+    remoteSaveStatus === "error"
+      ? "bg-red-500"
+      : remoteSaveStatus === "saving" || remoteSaveStatus === "loading"
+        ? "bg-amber-500"
+        : "bg-emerald-500";
+  const lastRemoteSavedLabel = lastRemoteSavedAt
+    ? new Intl.DateTimeFormat("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(new Date(lastRemoteSavedAt))
+    : null;
 
   const monthSummary = getMonthlySummary(
     transactions,
@@ -4850,6 +4969,32 @@ export function FinanceApp() {
                 <p className="text-2xl font-semibold tracking-tight text-slate-950">{activeViewLabel}</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <div
+                  className={`flex min-h-[60px] items-center gap-3 rounded-[20px] border px-4 py-3 shadow-[0_12px_30px_rgba(15,23,42,0.05)] ${remoteSaveTone}`}
+                  title={remoteSaveError ?? undefined}
+                >
+                  <span className={`h-2.5 w-2.5 rounded-full ${remoteSaveDot}`} />
+                  <div className="text-left">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em]">
+                      Dados
+                    </p>
+                    <p className="mt-1 text-sm font-semibold">
+                      {remoteSaveLabel}
+                    </p>
+                    {remoteSaveStatus === "saved" && lastRemoteSavedLabel ? (
+                      <p className="mt-0.5 text-[11px] opacity-75">Ultimo: {lastRemoteSavedLabel}</p>
+                    ) : null}
+                  </div>
+                  {remoteSaveStatus === "error" ? (
+                    <button
+                      type="button"
+                      onClick={() => saveStateToSupabase(buildPersistedState())}
+                      className="rounded-full bg-white/70 px-3 py-1 text-xs font-semibold transition hover:bg-white"
+                    >
+                      Tentar
+                    </button>
+                  ) : null}
+                </div>
                 <div className="rounded-[20px] border border-slate-200 bg-white px-3 py-2 shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
                   <label
                     className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400"
