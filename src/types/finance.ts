@@ -102,6 +102,7 @@ export interface Transaction {
   installmentNumber?: number;
   installmentTotal?: number;
   sourceBillId?: string;
+  linkedPlannedPurchaseId?: string;
   notes?: string;
 }
 
@@ -156,6 +157,7 @@ export interface PlannedPurchase {
   boardColumn: BoardColumn;
   savedAmount: number;
   suggestedPeriodAmount: number;
+  plannedAmountByMonth?: Record<string, number>;
   status: "idea" | "planned" | "active" | "bought" | "cancelled";
   planningMode?: "save_over_time" | "buy_in_target_period" | "card_parcelado";
   plannedPaymentMethod?: PaymentPlanMethod;

@@ -91,6 +91,7 @@ type DraftTransaction = {
   cardMode: CardMode;
   installments: number;
   description: string;
+  linkedPlannedPurchaseId: string;
 };
 
 type PlanningScreen = "purchases" | "reserves" | "investments" | "board";
@@ -378,6 +379,7 @@ const initialDraftTransaction: DraftTransaction = {
   cardMode: "credit",
   installments: 1,
   description: "",
+  linkedPlannedPurchaseId: "",
 };
 
 const initialDraftPurchase: DraftPurchase = {
@@ -807,7 +809,6 @@ export function FinanceApp() {
   const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false);
   const [editingPurchaseId, setEditingPurchaseId] = useState<string | null>(null);
   const [draftPurchase, setDraftPurchase] = useState(initialDraftPurchase);
-  const [showBoughtPurchases, setShowBoughtPurchases] = useState(false);
   const [isCardBalanceModalOpen, setIsCardBalanceModalOpen] = useState(false);
   const [draftCardBalanceUsed, setDraftCardBalanceUsed] = useState("");
   const [isAlertsPanelOpen, setIsAlertsPanelOpen] = useState(false);
@@ -822,7 +823,7 @@ export function FinanceApp() {
     "Dividas e repasses": false,
     "Compras planejadas": false,
   });
-  const [expandedCardBillCells, setExpandedCardBillCells] = useState<Record<string, boolean>>({});
+  const [expandedCardBillRows, setExpandedCardBillRows] = useState<Record<string, boolean>>({});
   const [isFixedClosingCollapsed, setIsFixedClosingCollapsed] = useState(true);
   const remoteSaveInFlightRef = useRef(false);
   const pendingRemoteSnapshotRef = useRef<FinancePersistedState | null>(null);
@@ -1210,7 +1211,7 @@ export function FinanceApp() {
               title: `Fatura ${card.name}`,
               amount: Number(amount.toFixed(2)),
               categoryId: "cat-bills",
-              categoryName: "Contas a pagar",
+              categoryName: "Fatura do cartao",
               dueDate: dueDateValue,
               priority: "Alta",
               isRecurring: true,
@@ -1245,10 +1246,9 @@ export function FinanceApp() {
 
     return { source: "manual" as const, bill: preferredBill };
   });
-  const billsForDisplay: BillDisplayItem[] = [
-    ...autoCardBills,
-    ...manualBillsForDisplay,
-  ].sort((left, right) => left.bill.dueDate.localeCompare(right.bill.dueDate));
+  const billsForDisplay: BillDisplayItem[] = manualBillsForDisplay.sort((left, right) =>
+    left.bill.dueDate.localeCompare(right.bill.dueDate),
+  );
   const selectableBillCategories = categories.filter(
     (category) => category.type === "expense" && !isHiddenUiCategoryId(category.id),
   );
@@ -1334,8 +1334,17 @@ export function FinanceApp() {
   const investmentSnapshot = getInvestmentSnapshot(investments);
   const monthTransactions = getMonthTransactions(transactions, referenceMonthDate);
   const selectedDraftCard = cards.find((card) => card.id === draftTransaction.cardId) ?? cards[0];
-  const activePlannedPurchases = plannedPurchases.filter((purchase) => purchase.status !== "bought");
-  const boughtPurchases = plannedPurchases.filter((purchase) => purchase.status === "bought");
+  const realizedPlannedPurchaseIds = new Set(
+    transactions
+      .map((transaction) => transaction.linkedPlannedPurchaseId)
+      .filter((value): value is string => Boolean(value)),
+  );
+  const activePlannedPurchases = plannedPurchases.filter(
+    (purchase) =>
+      purchase.status !== "cancelled" &&
+      purchase.status !== "bought" &&
+      !realizedPlannedPurchaseIds.has(purchase.id),
+  );
   const totalPlannedPurchaseValue = activePlannedPurchases.reduce(
     (sum, purchase) => sum + purchase.estimatedValue,
     0,
@@ -1455,6 +1464,14 @@ export function FinanceApp() {
 
   const salaryCalendarMonths = buildYearMonths(referenceMonthDate.getFullYear());
   const monthlyGridRows = createMonthlyGridRows();
+  const fixedEntriesByCardId = fixedEntries.reduce<Record<string, FixedFlowEntry[]>>((accumulator, entry) => {
+    if (entry.paymentMethod !== "credit_card" || !entry.cardId || !entry.linkedBillGroupId) {
+      return accumulator;
+    }
+
+    accumulator[entry.cardId] = [...(accumulator[entry.cardId] ?? []), entry];
+    return accumulator;
+  }, {});
   const fixedMonthEntries = monthlyGridRows.filter((entry) => (entry.amountByMonth[selectedMonth] ?? 0) > 0);
   const fixedMonthCompletedCount = fixedMonthEntries.filter((entry) =>
     entry.completedMonths.includes(selectedMonth),
@@ -2012,6 +2029,7 @@ export function FinanceApp() {
       amount: "",
       description: "",
       installments: 1,
+      linkedPlannedPurchaseId: "",
     }));
     setIsTransactionModalOpen(false);
   }
@@ -2122,12 +2140,6 @@ export function FinanceApp() {
                         : scheduleType === "month"
                           ? undefined
                           : purchase.targetWeek,
-                status:
-                  bucketId === "bought"
-                    ? "bought"
-                    : purchase.status === "bought"
-                      ? "planned"
-                      : purchase.status,
               };
             })()
           : purchase,
@@ -2171,74 +2183,6 @@ export function FinanceApp() {
     return planningBoardColumns.find((column) => column.id === purchase.boardColumn)?.label ?? "Planejamento";
   }
 
-  function createTransactionsFromPurchase(purchase: PlannedPurchase) {
-    const purchaseDate = purchase.desiredDate || `${selectedMonth}-14`;
-    const lowerName = purchase.name.toLowerCase();
-    const categoryId = lowerName.includes("roupa")
-      ? "cat-clothes"
-      : lowerName.includes("vapo")
-        ? "cat-volei"
-        : "cat-moto";
-    const categoryName = lowerName.includes("roupa")
-      ? "Roupas"
-      : lowerName.includes("vapo")
-        ? "Volei"
-        : "Moto";
-    const paymentOption =
-      purchase.planningMode === "card_parcelado"
-        ? "card"
-        : purchase.plannedPaymentMethod ?? "pix";
-    const cardMode =
-      purchase.planningMode === "card_parcelado"
-        ? "credit"
-        : purchase.plannedCardMode ?? "credit";
-    const installments =
-      paymentOption === "card" && cardMode === "credit"
-        ? purchase.planningMode === "card_parcelado"
-          ? Math.max(2, purchase.plannedInstallments ?? 2)
-          : Math.max(1, purchase.plannedInstallments ?? 1)
-        : 1;
-
-    return createTransactionsFromDraft(
-      {
-        title: purchase.name,
-        type: "expense",
-        amount: String(purchase.estimatedValue),
-        date: purchaseDate,
-        categoryId,
-        paymentOption,
-        accountId: settings.defaultAccountId,
-        cardId: purchase.plannedCardId ?? settings.defaultCardId,
-        cardMode,
-        installments,
-        description: "Conversao automatica do quadro de planejamento",
-      },
-      purchase.estimatedValue,
-      categoryName,
-    ).map((transaction) => ({
-      ...transaction,
-      expenseKind: "planned_purchase" as const,
-    }));
-  }
-
-  function handleConvertPurchase(purchase: PlannedPurchase) {
-    if (purchase.status === "bought") {
-      return;
-    }
-
-    setPlannedPurchases((current) =>
-      current.map((item) =>
-        item.id === purchase.id ? { ...item, boardColumn: "bought", status: "bought" } : item,
-      ),
-    );
-
-    setTransactions((current) =>
-      [...createTransactionsFromPurchase(purchase), ...current].sort(
-        (left, right) => right.date.localeCompare(left.date),
-      ),
-    );
-  }
-
   function openPurchaseModal(purchase?: PlannedPurchase) {
     setEditingPurchaseId(purchase?.id ?? null);
     setDraftPurchase(buildPurchaseDraft(purchase));
@@ -2258,15 +2202,20 @@ export function FinanceApp() {
     const savedAmount = Number(draftPurchase.savedAmount.replace(",", "."));
     const suggestedPeriodAmount = Number(draftPurchase.suggestedPeriodAmount.replace(",", "."));
 
-    if (!draftPurchase.name.trim() || !estimatedValue) {
+    if (!draftPurchase.name.trim()) {
       return;
     }
+
+    const currentPurchase = editingPurchaseId
+      ? plannedPurchases.find((purchase) => purchase.id === editingPurchaseId)
+      : undefined;
+    const isCardPlanning = draftPurchase.planningMode === "card_parcelado";
 
     const nextPurchase: PlannedPurchase = {
       id: editingPurchaseId ?? crypto.randomUUID(),
       name: draftPurchase.name.trim(),
       description: draftPurchase.description.trim() || undefined,
-      estimatedValue,
+      estimatedValue: Math.max(0, estimatedValue || 0),
       priority: draftPurchase.priority,
       desiredDate: draftPurchase.desiredDate || undefined,
       targetMonth: draftPurchase.desiredDate ? draftPurchase.desiredDate.slice(0, 7) : undefined,
@@ -2279,57 +2228,27 @@ export function FinanceApp() {
       savedAmount: Math.max(0, savedAmount),
       suggestedPeriodAmount:
         draftPurchase.planningMode === "save_over_time" ? Math.max(0, suggestedPeriodAmount) : 0,
-      status: Math.max(0, savedAmount) >= estimatedValue ? "active" : "planned",
+      plannedAmountByMonth: currentPurchase?.plannedAmountByMonth,
+      status: "planned",
       planningMode: draftPurchase.planningMode,
-      plannedPaymentMethod:
-        draftPurchase.planningMode === "card_parcelado" ? "card" : draftPurchase.paymentOption,
-      plannedCardId:
-        draftPurchase.planningMode === "card_parcelado" || draftPurchase.paymentOption === "card"
-          ? draftPurchase.cardId
-          : undefined,
-      plannedCardMode:
-        draftPurchase.planningMode === "card_parcelado" || draftPurchase.paymentOption === "card"
-          ? draftPurchase.planningMode === "card_parcelado"
-            ? "credit"
-            : draftPurchase.cardMode
-          : undefined,
-      plannedInstallments:
-        draftPurchase.planningMode === "card_parcelado"
-          ? Math.max(2, draftPurchase.installments)
-          : draftPurchase.paymentOption === "card" && draftPurchase.cardMode === "credit"
-            ? Math.max(1, draftPurchase.installments)
-            : undefined,
+      plannedPaymentMethod: isCardPlanning ? "card" : draftPurchase.paymentOption,
+      plannedCardId: isCardPlanning ? draftPurchase.cardId : undefined,
+      plannedCardMode: isCardPlanning ? "credit" : undefined,
+      plannedInstallments: isCardPlanning ? Math.max(1, draftPurchase.installments) : undefined,
       notes: undefined,
     };
 
     setPlannedPurchases((current) => {
       if (editingPurchaseId) {
         return current.map((purchase) =>
-          purchase.id === editingPurchaseId
-            ? {
-                ...purchase,
-                ...nextPurchase,
-                status: purchase.status === "bought" ? "bought" : nextPurchase.status,
-                boardColumn: purchase.status === "bought" ? "bought" : nextPurchase.boardColumn,
-              }
-            : purchase,
+          purchase.id === editingPurchaseId ? { ...purchase, ...nextPurchase } : purchase,
         );
       }
 
-      return [nextPurchase, ...current];
+      return [...current, nextPurchase];
     });
 
     closePurchaseModal();
-  }
-
-  function handleRestorePurchase(purchaseId: string) {
-    setPlannedPurchases((current) =>
-      current.map((purchase) =>
-        purchase.id === purchaseId
-          ? { ...purchase, status: "planned", boardColumn: "this_month" }
-          : purchase,
-      ),
-    );
   }
 
   function handleDeletePurchase(purchaseId: string) {
@@ -2527,7 +2446,7 @@ export function FinanceApp() {
 
   function getBillCategoryDisplayName(bill: Bill) {
     if (bill.categoryId === "cat-bills") {
-      return bill.isRecurring ? "Conta recorrente" : "Conta a pagar";
+      return bill.isRecurring ? "Conta recorrente" : "Vencimento";
     }
 
     if (bill.categoryId === "cat-debt") {
@@ -2535,6 +2454,18 @@ export function FinanceApp() {
     }
 
     return bill.categoryName;
+  }
+
+  function getDisplayCategoryName(categoryId: string | undefined, categoryName: string | undefined) {
+    if (categoryId === "cat-bills" || categoryName === "Contas a pagar") {
+      return "Fatura do cartao";
+    }
+
+    if (categoryId === "cat-debt" || categoryName === "Dividas") {
+      return "Divida";
+    }
+
+    return categoryName ?? "Sem categoria";
   }
 
   function getDraftBillCardModes() {
@@ -2994,7 +2925,7 @@ export function FinanceApp() {
         amount: difference,
         date: adjustmentDate,
         categoryId: "cat-bills",
-        categoryName: "Contas a pagar",
+        categoryName: "Fatura do cartao",
         paymentMethod: "credit_card",
         status: "paid",
         expenseKind: "variable",
@@ -3507,6 +3438,10 @@ export function FinanceApp() {
     const nextAmounts = Object.fromEntries(yearMonths.map((monthValue) => [monthValue, 0])) as Record<string, number>;
 
     if (purchase.planningMode === "card_parcelado") {
+      if (purchase.plannedAmountByMonth) {
+        return { ...nextAmounts, ...purchase.plannedAmountByMonth };
+      }
+
       const installments = Math.max(1, purchase.plannedInstallments ?? 1);
       const installmentValue = Number((purchase.estimatedValue / installments).toFixed(2));
 
@@ -3528,10 +3463,18 @@ export function FinanceApp() {
     }
 
     if (purchase.planningMode === "buy_in_target_period") {
+      if (purchase.plannedAmountByMonth) {
+        return { ...nextAmounts, ...purchase.plannedAmountByMonth };
+      }
+
       if (targetMonth in nextAmounts) {
         nextAmounts[targetMonth] = purchase.estimatedValue;
       }
       return nextAmounts;
+    }
+
+    if (purchase.plannedAmountByMonth) {
+      return { ...nextAmounts, ...purchase.plannedAmountByMonth };
     }
 
     const startMonth = selectedMonth;
@@ -3622,7 +3565,6 @@ export function FinanceApp() {
         amountByMonth: entry.amountByMonth,
         completedMonths: entry.completedMonths,
       }));
-
     const cardAutoRows: MonthlyGridRow[] = cards
       .filter((card) => card.availableMode !== "debit")
       .map((card) => {
@@ -3642,7 +3584,7 @@ export function FinanceApp() {
           sourceId: card.id,
           title: `Fatura ${card.name}`,
           categoryId: "cat-bills",
-          categoryName: "Contas a pagar",
+          categoryName: "Fatura do cartao",
           paymentMethod: "pix" as PaymentMethod,
           accountId: card.linkedAccountId ?? settings.defaultAccountId,
           cardId: card.id,
@@ -3656,10 +3598,14 @@ export function FinanceApp() {
       .filter((row) => Object.values(row.amountByMonth).some((amount) => amount > 0));
 
     const purchaseRows: MonthlyGridRow[] = plannedPurchases
-      .filter((purchase) => purchase.status !== "cancelled")
+      .filter(
+        (purchase) =>
+          purchase.status !== "cancelled" &&
+          purchase.status !== "bought" &&
+          !realizedPlannedPurchaseIds.has(purchase.id),
+      )
       .map((purchase) => {
         const category = getPlannedPurchaseCategory(purchase);
-        const purchaseTargetMonth = purchase.targetMonth ?? purchase.desiredDate?.slice(0, 7) ?? selectedMonth;
         const paymentDetails = getPlannedPaymentDetails(
           purchase.plannedPaymentMethod,
           purchase.plannedCardId,
@@ -3683,7 +3629,7 @@ export function FinanceApp() {
           linkedDebtId: undefined,
           notes: purchase.description,
           amountByMonth: getPlannedPurchaseAmountByMonth(purchase),
-          completedMonths: purchase.status === "bought" ? [purchaseTargetMonth] : [],
+          completedMonths: [],
         };
       });
 
@@ -3993,7 +3939,7 @@ export function FinanceApp() {
         return current.map((entry) => (entry.id === editingFixedEntryId ? nextEntry : entry));
       }
 
-      return [nextEntry, ...current];
+      return [...current, nextEntry];
     });
 
     if (linkedBillGroupId) {
@@ -4316,6 +4262,38 @@ export function FinanceApp() {
     );
   }
 
+  function handlePlannedPurchaseAmountChange(purchaseId: string, monthValue: string, rawValue: string) {
+    const purchase = plannedPurchases.find((item) => item.id === purchaseId);
+    if (!purchase) {
+      return;
+    }
+
+    const parsedValue = Number(rawValue.replace(",", ".")) || 0;
+    const nextAmount = Math.max(0, Number(parsedValue.toFixed(2)));
+    const nextAmounts = {
+      ...getPlannedPurchaseAmountByMonth(purchase),
+      [monthValue]: nextAmount,
+    };
+
+    setPlannedPurchases((current) =>
+      current.map((item) =>
+        item.id === purchaseId
+          ? {
+              ...item,
+              plannedAmountByMonth: nextAmounts,
+              scheduleType: "month",
+              specificMonthTarget: true,
+              targetMonth: monthValue,
+              desiredDate: alignDateToDay(
+                `${monthValue}-${item.desiredDate?.slice(8, 10) ?? "28"}`,
+                Number(item.desiredDate?.slice(8, 10) ?? "28"),
+              ),
+            }
+          : item,
+      ),
+    );
+  }
+
   function handleToggleFixedEntry(entryId: string, monthValue: string) {
     const entry = fixedEntries.find((item) => item.id === entryId);
     const amount = entry?.amountByMonth[monthValue] ?? 0;
@@ -4605,6 +4583,17 @@ export function FinanceApp() {
         return;
       }
 
+      const sourceAmount = row.amountByMonth[sourceMonthValue] ?? 0;
+      if (sourceAmount <= 0) {
+        return;
+      }
+
+      const targetAmount = row.amountByMonth[targetMonthValue] ?? 0;
+      const nextAmountByMonth = {
+        ...getPlannedPurchaseAmountByMonth(purchase),
+        [sourceMonthValue]: targetAmount,
+        [targetMonthValue]: sourceAmount,
+      };
       const currentDay = purchase.desiredDate?.slice(8, 10) ?? "28";
       const nextDesiredDate = alignDateToDay(`${targetMonthValue}-${currentDay}`, Number(currentDay));
 
@@ -4613,6 +4602,7 @@ export function FinanceApp() {
           item.id === purchase.id
             ? {
                 ...item,
+                plannedAmountByMonth: nextAmountByMonth,
                 scheduleType: "month",
                 specificMonthTarget: true,
                 targetMonth: targetMonthValue,
@@ -5089,39 +5079,98 @@ export function FinanceApp() {
   );
 
   function renderDashboard() {
-    const homeTabs: Array<{ id: HomeTab; label: string }> = [
-      { id: "grid", label: "Planilha" },
-      { id: "planning", label: "Planejamento" },
-      { id: "accounts", label: "Contas" },
-      { id: "cards", label: "Cartoes" },
+    const homeTabs: Array<{ id: HomeTab; label: string; description: string; tone: string }> = [
+      {
+        id: "grid",
+        label: "Planilha",
+        description: "Planejar meses",
+        tone: "from-blue-600 to-sky-500",
+      },
+      {
+        id: "planning",
+        label: "Planejamento",
+        description: "Compras e metas",
+        tone: "from-violet-600 to-indigo-500",
+      },
+      {
+        id: "accounts",
+        label: "Contas",
+        description: "Obrigacoes",
+        tone: "from-emerald-600 to-teal-500",
+      },
+      {
+        id: "cards",
+        label: "Cartoes",
+        description: "Faturas",
+        tone: "from-sky-600 to-blue-500",
+      },
     ];
+    const activeHomeTab = homeTabs.find((tab) => tab.id === homeTab) ?? homeTabs[0];
 
     return (
       <div className="space-y-4">
-        <div className="flex flex-wrap items-center gap-2 rounded-[28px] border border-slate-200 bg-white px-4 py-4 shadow-[0_18px_42px_rgba(15,23,42,0.05)]">
-          {homeTabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => updateHomeLocation(tab.id)}
-              className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                homeTab === tab.id
-                  ? "bg-slate-900 text-white"
-                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+        <div className="overflow-hidden rounded-[34px] border border-white/80 bg-white/80 shadow-[0_24px_80px_rgba(30,79,160,0.10)] backdrop-blur">
+          <div className={`bg-gradient-to-r ${activeHomeTab.tone} px-5 py-5 text-white`}>
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/72">
+                  Central Monex
+                </p>
+                <h2 className="mt-2 text-2xl font-semibold tracking-tight">
+                  {activeHomeTab.id === "grid" ? "Planeje os proximos meses pela planilha" : activeHomeTab.label}
+                </h2>
+                <p className="mt-1 max-w-2xl text-sm text-white/78">
+                  {activeHomeTab.id === "grid"
+                    ? "Ajuste entradas, contas, faturas e compras futuras sem sair do fluxo principal."
+                    : activeHomeTab.description}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-right sm:flex">
+                <div className="rounded-2xl bg-white/14 px-4 py-3 ring-1 ring-white/18">
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-white/62">Entradas</p>
+                  <p className="mt-1 text-sm font-semibold">{formatCurrency(fixedMonthPlannedIncome)}</p>
+                </div>
+                <div className="rounded-2xl bg-white/14 px-4 py-3 ring-1 ring-white/18">
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-white/62">Saidas</p>
+                  <p className="mt-1 text-sm font-semibold">{formatCurrency(fixedMonthPlannedExpense)}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-2 overflow-x-auto border-t border-white/70 bg-white/72 px-3 py-3">
+            {homeTabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => updateHomeLocation(tab.id)}
+                className={`group min-w-[150px] rounded-[22px] px-4 py-3 text-left transition duration-200 ${
+                  homeTab === tab.id
+                    ? "bg-slate-950 text-white shadow-[0_18px_40px_rgba(15,23,42,0.18)]"
+                    : "bg-white/72 text-slate-600 ring-1 ring-slate-200 hover:-translate-y-0.5 hover:bg-white hover:text-slate-950"
+                }`}
+              >
+                <span className="block text-sm font-semibold">{tab.label}</span>
+                <span
+                  className={`mt-1 block text-[11px] uppercase tracking-[0.16em] ${
+                    homeTab === tab.id ? "text-white/58" : "text-slate-400 group-hover:text-slate-500"
+                  }`}
+                >
+                  {tab.description}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
 
-        {homeTab === "grid"
-          ? renderTransactionsWorkspace()
-          : homeTab === "planning"
-            ? renderPlanning()
-            : homeTab === "accounts"
-              ? renderBills()
-              : renderCardsHomeTab()}
+        <div className="animate-home-section">
+          {homeTab === "grid"
+            ? renderTransactionsWorkspace()
+            : homeTab === "planning"
+              ? renderPlanning()
+              : homeTab === "accounts"
+                ? renderBills()
+                : renderCardsHomeTab()}
+        </div>
       </div>
     );
   }
@@ -5178,24 +5227,32 @@ export function FinanceApp() {
               title="Centro operacional em planilha"
               description=""
             >
+              <div className="mb-4 rounded-[26px] border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-sky-50 px-4 py-4 lg:hidden">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-blue-600">
+                  Resumo rapido
+                </p>
+                <p className="mt-2 text-sm text-slate-600">
+                  Use os blocos abaixo para acompanhar o mes. A planilha completa continua logo abaixo com rolagem por faixa.
+                </p>
+              </div>
               <div className="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-4">
+                <div className="rounded-[24px] border border-emerald-100 bg-gradient-to-br from-emerald-50 to-white px-4 py-4 shadow-[0_18px_42px_rgba(16,185,129,0.08)] transition duration-200 hover:-translate-y-0.5">
                   <p className="text-[11px] uppercase tracking-[0.22em] text-emerald-700">Entradas do mes</p>
                   <p className="mt-2 text-xl font-semibold text-emerald-700">
                     {formatCurrency(fixedMonthPlannedIncome)}
                   </p>
                 </div>
-                <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-4">
+                <div className="rounded-[24px] border border-rose-100 bg-gradient-to-br from-rose-50 to-white px-4 py-4 shadow-[0_18px_42px_rgba(244,63,94,0.08)] transition duration-200 hover:-translate-y-0.5">
                   <p className="text-[11px] uppercase tracking-[0.22em] text-rose-700">Saidas do mes</p>
                   <p className="mt-2 text-xl font-semibold text-rose-700">
                     {formatCurrency(fixedMonthPlannedExpense)}
                   </p>
                 </div>
-                <div className="rounded-2xl border border-sky-100 bg-sky-50 px-4 py-4">
+                <div className="rounded-[24px] border border-sky-100 bg-gradient-to-br from-sky-50 to-white px-4 py-4 shadow-[0_18px_42px_rgba(14,165,233,0.08)] transition duration-200 hover:-translate-y-0.5">
                   <p className="text-[11px] uppercase tracking-[0.22em] text-sky-700">Ja marcados</p>
                   <p className="mt-2 text-xl font-semibold text-sky-700">{fixedMonthCompletedCount}</p>
                 </div>
-                <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-4">
+                <div className="rounded-[24px] border border-violet-100 bg-gradient-to-br from-violet-50 to-white px-4 py-4 shadow-[0_18px_42px_rgba(124,58,237,0.08)] transition duration-200 hover:-translate-y-0.5">
                   <p className="text-[11px] uppercase tracking-[0.22em] text-violet-700">Saldo previsto</p>
                   <p
                     className={`mt-2 text-xl font-semibold ${
@@ -5210,7 +5267,7 @@ export function FinanceApp() {
               </div>
 
               <div className="mt-5 max-w-full overflow-x-auto pb-2">
-                <div className="w-full min-w-[820px] rounded-[24px] border border-slate-200 bg-slate-950 px-3 py-3">
+                <div className="w-full min-w-[820px] rounded-[28px] border border-blue-950/80 bg-[linear-gradient(135deg,#020617,#0b1f4d_55%,#0a3c73)] px-3 py-3 shadow-[0_22px_58px_rgba(15,23,42,0.22)]">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-2">
                     <p className="text-sm font-semibold text-white">Comparativo mensal</p>
                     <p className="max-w-full text-[11px] uppercase tracking-[0.18em] text-white/60">
@@ -5247,7 +5304,7 @@ export function FinanceApp() {
                               monthItem.monthValue === selectedMonth ? "bg-emerald-500/20" : "bg-transparent"
                             }`}
                           >
-                            {monthItem.income > 0 ? formatCurrency(monthItem.income) : "â€”"}
+                            {monthItem.income > 0 ? formatCurrency(monthItem.income) : "-"}
                           </td>
                         ))}
                       </tr>
@@ -5262,7 +5319,7 @@ export function FinanceApp() {
                               monthItem.monthValue === selectedMonth ? "bg-rose-500/20" : "bg-transparent"
                             }`}
                           >
-                            {monthItem.expenses > 0 ? formatCurrency(monthItem.expenses) : "â€”"}
+                            {monthItem.expenses > 0 ? formatCurrency(monthItem.expenses) : "-"}
                           </td>
                         ))}
                       </tr>
@@ -5305,7 +5362,7 @@ export function FinanceApp() {
                   return (
                     <div
                       key={section}
-                      className={`min-w-0 overflow-hidden rounded-[28px] border px-3 py-3 ${fixedSectionStyles[section]}`}
+                      className={`min-w-0 overflow-hidden rounded-[30px] border px-3 py-3 shadow-[0_18px_46px_rgba(31,58,126,0.06)] transition duration-200 ${fixedSectionStyles[section]}`}
                     >
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="space-y-2">
@@ -5387,16 +5444,33 @@ export function FinanceApp() {
                                           {row.title}
                                         </button>
                                         <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">
-                                          {row.categoryName}
+                                          {getDisplayCategoryName(row.categoryId, row.categoryName)}
                                         </p>
                                       </div>
-                                      <button
-                                        type="button"
-                                        onClick={() => openMonthlyGridRowModal(row)}
-                                        className="rounded-full border border-slate-200 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 transition hover:bg-slate-50"
-                                      >
-                                        Editar
-                                      </button>
+                                      <div className="flex flex-col items-end gap-1">
+                                        <button
+                                          type="button"
+                                          onClick={() => openMonthlyGridRowModal(row)}
+                                          className="rounded-full border border-slate-200 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 transition hover:bg-slate-50"
+                                        >
+                                          Editar
+                                        </button>
+                                        {row.sourceType === "card_auto_bill" &&
+                                        (fixedEntriesByCardId[row.sourceId] ?? []).length ? (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              setExpandedCardBillRows((current) => ({
+                                                ...current,
+                                                [row.sourceId]: !current[row.sourceId],
+                                              }))
+                                            }
+                                            className="rounded-full bg-sky-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-sky-700 transition hover:bg-sky-100"
+                                          >
+                                            {expandedCardBillRows[row.sourceId] ? "Ocultar itens" : "Visualizar itens"}
+                                          </button>
+                                        ) : null}
+                                      </div>
                                     </div>
                                   </th>
                                   {salaryCalendarMonths.map((monthItem) => {
@@ -5404,16 +5478,21 @@ export function FinanceApp() {
                                     const isCompleted = row.completedMonths.includes(monthItem.monthValue);
                                     const isPurchaseRow = row.sourceType === "planned_purchase";
                                     const isCardAutoBillRow = row.sourceType === "card_auto_bill";
-                                    const cardBillCellKey = `${row.sourceId}-${monthItem.monthValue}`;
                                     const cardFixedItems =
                                       isCardAutoBillRow
                                         ? fixedEntries.filter(
                                             (entry) =>
                                               entry.paymentMethod === "credit_card" &&
                                               entry.cardId === row.sourceId &&
+                                              Boolean(entry.linkedBillGroupId) &&
                                               (entry.amountByMonth[monthItem.monthValue] ?? 0) > 0,
                                           )
                                         : [];
+                                    const visibleCardFixedItems = cardFixedItems.slice(-5);
+                                    const hiddenCardFixedItemCount = Math.max(
+                                      0,
+                                      cardFixedItems.length - visibleCardFixedItems.length,
+                                    );
 
                                     return (
                                       <td
@@ -5441,8 +5520,7 @@ export function FinanceApp() {
                                         }}
                                       >
                                         {isPurchaseRow ? (
-                                          <button
-                                            type="button"
+                                          <div
                                             draggable={amount > 0}
                                             onDragStart={() =>
                                               amount > 0
@@ -5459,13 +5537,25 @@ export function FinanceApp() {
                                                   : "cursor-grab bg-violet-50 text-violet-700 hover:bg-violet-100 active:cursor-grabbing"
                                             }`}
                                           >
-                                            <span className="text-[11px] font-semibold leading-tight">
-                                              {amount > 0 ? formatCurrency(amount) : "â€”"}
-                                            </span>
+                                            <input
+                                              value={amount > 0 ? String(amount) : ""}
+                                              onClick={(event) => event.stopPropagation()}
+                                              onFocus={(event) => event.stopPropagation()}
+                                              onChange={(event) =>
+                                                handlePlannedPurchaseAmountChange(
+                                                  row.sourceId,
+                                                  monthItem.monthValue,
+                                                  event.target.value,
+                                                )
+                                              }
+                                              inputMode="decimal"
+                                              placeholder="0"
+                                              className="w-full bg-transparent text-[11px] font-semibold leading-tight outline-none placeholder:text-current/40"
+                                            />
                                             <span className="text-[9px] font-semibold uppercase tracking-[0.12em]">
-                                              {amount <= 0 ? "Sem valor" : isCompleted ? "Comprado" : "Abrir"}
+                                              {amount <= 0 ? "Sem valor" : "Abrir"}
                                             </span>
-                                          </button>
+                                          </div>
                                         ) : isCardAutoBillRow ? (
                                           <div
                                             className={`flex min-h-[72px] w-full flex-col justify-between rounded-[18px] px-2 py-2 text-left transition ${
@@ -5484,30 +5574,15 @@ export function FinanceApp() {
                                               className="text-left"
                                             >
                                               <span className="block text-[11px] font-semibold leading-tight">
-                                                {amount > 0 ? formatCurrency(amount) : "â€”"}
+                                                {amount > 0 ? formatCurrency(amount) : "-"}
                                               </span>
                                               <span className="mt-2 block text-[9px] font-semibold uppercase tracking-[0.12em]">
                                                 {amount <= 0 ? "Sem fatura" : isCompleted ? "Quitada" : "Abrir"}
                                               </span>
                                             </button>
-                                            {cardFixedItems.length ? (
-                                              <button
-                                                type="button"
-                                                onClick={(event) => {
-                                                  event.stopPropagation();
-                                                  setExpandedCardBillCells((current) => ({
-                                                    ...current,
-                                                    [cardBillCellKey]: !current[cardBillCellKey],
-                                                  }));
-                                                }}
-                                                className="mt-2 rounded-full bg-white/80 px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-sky-700"
-                                              >
-                                                {expandedCardBillCells[cardBillCellKey] ? "Ocultar itens" : "Visualizar itens"}
-                                              </button>
-                                            ) : null}
-                                            {expandedCardBillCells[cardBillCellKey] ? (
+                                            {expandedCardBillRows[row.sourceId] && cardFixedItems.length ? (
                                               <div className="mt-2 space-y-1 border-t border-sky-200/70 pt-2">
-                                                {cardFixedItems.map((entry) => (
+                                                {visibleCardFixedItems.map((entry) => (
                                                   <div key={entry.id} className="flex justify-between gap-2 text-[10px]">
                                                     <span className="truncate">{entry.title}</span>
                                                     <span className="font-semibold">
@@ -5515,6 +5590,21 @@ export function FinanceApp() {
                                                     </span>
                                                   </div>
                                                 ))}
+                                                {hiddenCardFixedItemCount > 0 ? (
+                                                  <button
+                                                    type="button"
+                                                    onClick={(event) => {
+                                                      event.stopPropagation();
+                                                      openCardDetails(
+                                                        row.sourceId,
+                                                        getMonthValueOffset(monthItem.monthValue, -1),
+                                                      );
+                                                    }}
+                                                    className="mt-1 w-full rounded-full bg-white/80 px-2 py-1 text-left text-[10px] font-semibold text-sky-700 transition hover:bg-white"
+                                                  >
+                                                    Ver mais {hiddenCardFixedItemCount}
+                                                  </button>
+                                                ) : null}
                                               </div>
                                             ) : null}
                                           </div>
@@ -5599,7 +5689,7 @@ export function FinanceApp() {
                                       salaryCalendarMonths[index].monthValue === selectedMonth ? "bg-sky-700" : ""
                                     }`}
                                   >
-                                    {amount > 0 ? formatCurrency(amount) : "â€”"}
+                                    {amount > 0 ? formatCurrency(amount) : "-"}
                                   </td>
                                 ))}
                                 <td className="rounded-br-2xl border border-slate-200 bg-slate-900 px-2 py-2.5 text-right text-[10px] font-semibold text-white">
@@ -5645,7 +5735,9 @@ export function FinanceApp() {
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <p className="text-sm font-semibold text-slate-900">{entry.title}</p>
-                            <p className="mt-1 text-sm text-slate-500">{entry.categoryName}</p>
+                            <p className="mt-1 text-sm text-slate-500">
+                              {getDisplayCategoryName(entry.categoryId, entry.categoryName)}
+                            </p>
                           </div>
                           <p
                             className={`text-lg font-semibold ${
@@ -5815,7 +5907,7 @@ export function FinanceApp() {
                       <div>
                         <p className="text-sm font-semibold text-slate-900">{transaction.title}</p>
                         <p className="mt-1 text-sm text-slate-500">
-                          {transaction.categoryName} - {paymentLabels[transaction.paymentMethod]} -{" "}
+                          {getDisplayCategoryName(transaction.categoryId, transaction.categoryName)} - {paymentLabels[transaction.paymentMethod]} -{" "}
                           {formatShortDate(transaction.date)}
                         </p>
                         {transaction.description ? (
@@ -5888,6 +5980,8 @@ export function FinanceApp() {
                           categoryId: event.target.value === "income" ? "cat-salary" : "cat-market",
                           paymentOption:
                             event.target.value === "income" ? "bank_transfer" : current.paymentOption,
+                          linkedPlannedPurchaseId:
+                            event.target.value === "income" ? "" : current.linkedPlannedPurchaseId,
                         }))
                       }
                       className="field"
@@ -6046,6 +6140,58 @@ export function FinanceApp() {
                       Compras em credito com mais de 1 parcela geram lancamentos futuros automaticamente.
                     </div>
                   </div>
+                ) : null}
+
+                {draftTransaction.type === "expense" && activePlannedPurchases.length ? (
+                  <FormField label="Vincular compra planejada">
+                    <select
+                      value={draftTransaction.linkedPlannedPurchaseId}
+                      onChange={(event) => {
+                        const purchase = activePlannedPurchases.find((item) => item.id === event.target.value);
+                        setDraftTransaction((current) => {
+                          if (!purchase) {
+                            return { ...current, linkedPlannedPurchaseId: "" };
+                          }
+
+                          const purchaseCategory = getPlannedPurchaseCategory(purchase);
+                          const isCardPurchase = purchase.planningMode === "card_parcelado";
+                          const plannedAmount =
+                            getPlannedPurchaseAmountByMonth(purchase)[current.date.slice(0, 7)] ??
+                            purchase.estimatedValue;
+
+                          return {
+                            ...current,
+                            linkedPlannedPurchaseId: purchase.id,
+                            title: current.title || purchase.name,
+                            amount: current.amount
+                              ? current.amount
+                              : plannedAmount > 0
+                                ? String(plannedAmount)
+                                : "",
+                            categoryId: purchaseCategory.id,
+                            paymentOption: isCardPurchase
+                              ? "card"
+                              : purchase.plannedPaymentMethod === "card"
+                                ? "pix"
+                                : purchase.plannedPaymentMethod ?? "pix",
+                            cardId: isCardPurchase ? purchase.plannedCardId ?? current.cardId : current.cardId,
+                            cardMode: isCardPurchase ? "credit" : current.cardMode,
+                            installments: isCardPurchase
+                              ? Math.max(1, purchase.plannedInstallments ?? current.installments)
+                              : current.installments,
+                          };
+                        });
+                      }}
+                      className="field"
+                    >
+                      <option value="">Nenhuma</option>
+                      {activePlannedPurchases.map((purchase) => (
+                        <option key={purchase.id} value={purchase.id}>
+                          {purchase.name}
+                        </option>
+                      ))}
+                    </select>
+                  </FormField>
                 ) : null}
 
                 <FormField label="Observacao">
@@ -6594,7 +6740,9 @@ export function FinanceApp() {
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
                 <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Categoria</p>
-                <p className="mt-2 text-sm font-semibold text-slate-900">{row.categoryName}</p>
+                <p className="mt-2 text-sm font-semibold text-slate-900">
+                  {getDisplayCategoryName(row.categoryId, row.categoryName)}
+                </p>
               </div>
               <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
                 <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Pagamento</p>
@@ -6668,17 +6816,6 @@ export function FinanceApp() {
                     : entryKind === "income"
                       ? "Marcar que entrou"
                       : "Marcar como pago"}
-              </button>
-            ) : plannedPurchase && plannedPurchase.status !== "bought" ? (
-              <button
-                type="button"
-                onClick={() => {
-                  handleConvertPurchase(plannedPurchase);
-                  closeMonthlyGridCardModal();
-                }}
-                className="rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-600"
-              >
-                Ja comprei
               </button>
             ) : null}
             <button
@@ -6987,7 +7124,7 @@ export function FinanceApp() {
                 {editingPurchaseId ? "Ajustar item do planejamento" : "Adicionar item ao planejamento"}
               </h3>
               <p className="mt-2 text-sm text-slate-500">
-                Aqui voce define valor, urgencia, etapa do quadro e quanto ja esta reservado.
+                Aqui voce configura a compra futura. Os valores mes a mes podem ser ajustados direto na planilha.
               </p>
             </div>
             <button
@@ -7012,7 +7149,7 @@ export function FinanceApp() {
                   className="field"
                 />
               </FormField>
-              <FormField label="Prioridade">
+              <FormField label="Prioridade opcional">
                 <select
                   value={draftPurchase.priority}
                   onChange={(event) =>
@@ -7044,7 +7181,7 @@ export function FinanceApp() {
             </FormField>
 
             <div className="grid gap-3 sm:grid-cols-3">
-              <FormField label="Valor estimado">
+              <FormField label="Valor estimado opcional">
                 <input
                   value={draftPurchase.estimatedValue}
                   onChange={(event) =>
@@ -7069,20 +7206,26 @@ export function FinanceApp() {
                   className="field"
                 />
               </FormField>
-              <FormField label="Guardar por periodo">
-                <input
-                  value={draftPurchase.suggestedPeriodAmount}
-                  onChange={(event) =>
-                    setDraftPurchase((current) => ({
-                      ...current,
-                      suggestedPeriodAmount: event.target.value,
-                    }))
-                  }
-                  placeholder="0,00"
-                  inputMode="decimal"
-                  className="field"
-                />
-              </FormField>
+              {draftPurchase.planningMode === "save_over_time" ? (
+                <FormField label="Valor sugerido por mes">
+                  <input
+                    value={draftPurchase.suggestedPeriodAmount}
+                    onChange={(event) =>
+                      setDraftPurchase((current) => ({
+                        ...current,
+                        suggestedPeriodAmount: event.target.value,
+                      }))
+                    }
+                    placeholder="0,00"
+                    inputMode="decimal"
+                    className="field"
+                  />
+                </FormField>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-500">
+                  Ajuste a distribuicao mensal pela planilha quando precisar.
+                </div>
+              )}
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
@@ -7117,24 +7260,46 @@ export function FinanceApp() {
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <FormField label="Como pretende pagar">
+              <FormField label="Modo do planejamento">
                 <select
-                  value={draftPurchase.paymentOption}
+                  value={draftPurchase.planningMode}
                   onChange={(event) =>
-                    setDraftPurchase((current) => ({
-                      ...current,
-                      paymentOption: event.target.value as PaymentPlanMethod,
-                    }))
+                    setDraftPurchase((current) => {
+                      const nextMode = event.target.value as DraftPurchase["planningMode"];
+                      return {
+                        ...current,
+                        planningMode: nextMode,
+                        paymentOption: nextMode === "card_parcelado" ? "card" : current.paymentOption === "card" ? "pix" : current.paymentOption,
+                        cardMode: nextMode === "card_parcelado" ? "credit" : current.cardMode,
+                        installments: nextMode === "card_parcelado" ? Math.max(1, current.installments) : 1,
+                      };
+                    })
                   }
                   className="field"
                 >
-                  <option value="pix">Pix</option>
-                  <option value="cash">Dinheiro</option>
-                  <option value="bank_transfer">Transferencia</option>
-                  <option value="card">Cartao</option>
+                  <option value="save_over_time">Guardar dinheiro</option>
+                  <option value="buy_in_target_period">Comprar a vista</option>
+                  <option value="card_parcelado">Comprar no cartao</option>
                 </select>
               </FormField>
-              {draftPurchase.paymentOption === "card" ? (
+              {draftPurchase.planningMode !== "card_parcelado" ? (
+                <FormField label={draftPurchase.planningMode === "save_over_time" ? "Onde guardar" : "Meio previsto"}>
+                  <select
+                    value={draftPurchase.paymentOption === "card" ? "pix" : draftPurchase.paymentOption}
+                    onChange={(event) =>
+                      setDraftPurchase((current) => ({
+                        ...current,
+                        paymentOption: event.target.value as PaymentPlanMethod,
+                      }))
+                    }
+                    className="field"
+                  >
+                    <option value="pix">Pix</option>
+                    <option value="cash">Dinheiro</option>
+                    <option value="bank_transfer">Transferencia</option>
+                  </select>
+                </FormField>
+              ) : (
                 <FormField label="Cartao planejado">
                   <select
                     value={draftPurchase.cardId}
@@ -7150,30 +7315,34 @@ export function FinanceApp() {
                     ))}
                   </select>
                 </FormField>
-              ) : (
-                <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-500">
-                  Se quiser pagar no cartao, selecione a opcao ao lado.
-                </div>
               )}
             </div>
 
+            {draftPurchase.planningMode === "card_parcelado" ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <FormField label="Parcelas previstas">
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    value={draftPurchase.installments}
+                    onChange={(event) =>
+                      setDraftPurchase((current) => ({
+                        ...current,
+                        installments: Number(event.target.value || 1),
+                      }))
+                    }
+                    className="field"
+                  />
+                </FormField>
+                <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-sm text-violet-800">
+                  Isto e so previsao. A fatura do cartao so recebe valores quando uma transacao real for vinculada.
+                </div>
+              </div>
+            ) : null}
+
             <div className="flex flex-wrap justify-between gap-3">
               <div className="flex flex-wrap gap-3">
-                {editingPurchaseId ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const purchase = plannedPurchases.find((item) => item.id === editingPurchaseId);
-                      if (purchase) {
-                        handleConvertPurchase(purchase);
-                        closePurchaseModal();
-                      }
-                    }}
-                    className="rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-600"
-                  >
-                    Ja comprei
-                  </button>
-                ) : null}
                 {editingPurchaseId ? (
                   <button
                     type="button"
@@ -8275,18 +8444,11 @@ export function FinanceApp() {
                 ))}
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowBoughtPurchases((current) => !current)}
-              className="rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
-            >
-              {showBoughtPurchases ? "Ocultar comprados" : `Produtos comprados (${boughtPurchases.length})`}
-            </button>
           </div>
 
           <Panel
             title="Planejamento de compras"
-            description="Arraste cada item para a etapa certa. Clique no card para editar ou marcar como comprado."
+            description="Arraste cada item para a etapa certa. Clique no card para editar o planejamento."
           >
             <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
               Visualizacao atual: <span className="font-semibold text-slate-900">{planningBoardViewLabels[planningBoardView]}</span>
@@ -8371,52 +8533,6 @@ export function FinanceApp() {
             </div>
           </Panel>
 
-          {showBoughtPurchases ? (
-            <Panel
-              title="Produtos ja comprados"
-              description="Os itens comprados somem do quadro principal e ficam guardados aqui."
-            >
-              <div className="space-y-3">
-                {boughtPurchases.length ? (
-                  boughtPurchases.map((purchase) => (
-                    <div
-                      key={purchase.id}
-                      className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-4"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">{purchase.name}</p>
-                          <p className="mt-1 text-sm text-slate-600">
-                            Comprado por {formatCurrency(purchase.estimatedValue)}
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() => openPurchaseModal(purchase)}
-                            className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                          >
-                            Editar
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRestorePurchase(purchase.id)}
-                            className="rounded-full bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
-                          >
-                            Voltar ao quadro
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                    Ainda nao ha produtos marcados como comprados.
-                  </div>
-                )}
-              </div>
-            </Panel>
-          ) : null}
           {renderPurchaseModal()}
         </div>
       );
@@ -8956,7 +9072,7 @@ export function FinanceApp() {
                         <div>
                           <p className="text-sm font-semibold text-slate-900">{transaction.title}</p>
                           <p className="mt-1 text-sm text-slate-500">
-                            {transaction.categoryName} - {formatShortDate(transaction.date)}
+                            {getDisplayCategoryName(transaction.categoryId, transaction.categoryName)} - {formatShortDate(transaction.date)}
                           </p>
                           {transaction.installmentTotal ? (
                             <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">
@@ -9030,7 +9146,9 @@ export function FinanceApp() {
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <p className="text-sm font-semibold text-slate-900">{entry.title}</p>
-                            <p className="mt-1 text-sm text-slate-500">{entry.categoryName}</p>
+                            <p className="mt-1 text-sm text-slate-500">
+                              {getDisplayCategoryName(entry.categoryId, entry.categoryName)}
+                            </p>
                           </div>
                           <p className="text-sm font-semibold text-slate-900">
                             {formatCurrency(entry.amountByMonth[selectedCardStatementMonth] ?? 0)}
@@ -9061,7 +9179,7 @@ export function FinanceApp() {
                     value={selectedCardStatementAutoBill ? formatCurrency(selectedCardStatementAutoBill.bill.amount) : formatCurrency(0)}
                     support={
                       selectedCardStatementDueLabel
-                        ? `Vai para Contas a pagar com vencimento em ${selectedCardStatementDueLabel}`
+                        ? `Vai para Contas como fatura com vencimento em ${selectedCardStatementDueLabel}`
                         : "Sem valor pendente para gerar conta"
                     }
                   />
@@ -10367,7 +10485,9 @@ export function FinanceApp() {
           paymentMethod,
           status: index === 0 ? "paid" : "planned",
           expenseKind:
-            draft.categoryId === "cat-invest"
+            draft.linkedPlannedPurchaseId
+              ? "planned_purchase"
+              : draft.categoryId === "cat-invest"
               ? "investment"
               : draft.categoryId === "cat-debt"
                 ? "debt_payment"
@@ -10379,6 +10499,7 @@ export function FinanceApp() {
           installmentTotal: draft.installments,
           accountId: draft.accountId,
           description: draft.description,
+          linkedPlannedPurchaseId: draft.linkedPlannedPurchaseId || undefined,
         } satisfies Transaction;
       });
     }
@@ -10397,7 +10518,9 @@ export function FinanceApp() {
         incomeKind: draft.type === "income" ? "variable" : undefined,
         expenseKind:
           draft.type === "expense"
-            ? draft.categoryId === "cat-invest"
+            ? draft.linkedPlannedPurchaseId
+              ? "planned_purchase"
+              : draft.categoryId === "cat-invest"
               ? "investment"
               : draft.categoryId === "cat-debt"
                 ? "debt_payment"
@@ -10415,6 +10538,7 @@ export function FinanceApp() {
             : undefined,
         accountId: draft.accountId,
         description: draft.description,
+        linkedPlannedPurchaseId: draft.linkedPlannedPurchaseId || undefined,
       } satisfies Transaction,
     ];
   }
