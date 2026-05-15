@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 const APP_STATE_KEY = "default";
+const SUPABASE_REQUEST_TIMEOUT_MS = 12000;
 
 function getSupabaseConfig() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -15,6 +16,10 @@ function getSupabaseConfig() {
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unknown server error";
+}
+
+function getSupabaseRequestSignal() {
+  return AbortSignal.timeout(SUPABASE_REQUEST_TIMEOUT_MS);
 }
 
 export async function GET() {
@@ -36,6 +41,7 @@ export async function GET() {
           Authorization: `Bearer ${config.serviceRoleKey}`,
         },
         cache: "no-store",
+        signal: getSupabaseRequestSignal(),
       },
     );
 
@@ -86,6 +92,7 @@ export async function PUT(request: Request) {
         state: body.state,
         updated_at: new Date().toISOString(),
       }),
+      signal: getSupabaseRequestSignal(),
     });
 
     if (!response.ok) {

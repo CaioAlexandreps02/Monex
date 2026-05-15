@@ -82,6 +82,14 @@ import {
 type DraftTransaction = {
   title: string;
   type: "income" | "expense";
+  operationKind:
+    | "income"
+    | "variable"
+    | "basic_bill"
+    | "recurring_bill"
+    | "debt_payment"
+    | "investment"
+    | "planned_purchase";
   amount: string;
   date: string;
   categoryId: string;
@@ -98,7 +106,7 @@ type PlanningScreen = "purchases" | "reserves" | "investments" | "board";
 type PlanningBoardView = "default" | "weeks" | "months";
 type ReportsSection = "cashflow" | "categories" | "payment-methods" | "monthly-trend" | "exports";
 type SettingsSection = "main" | "salary" | "categories" | "banks" | "accounts" | "security";
-type AccountsSection = "overview" | "recurring" | "debts";
+type AccountsSection = "overview" | "normal" | "recurring" | "debts";
 type HomeTab = "grid" | "planning" | "accounts" | "cards";
 type AccountEntryKind = "bill" | "debt";
 type BillDisplayItem =
@@ -127,6 +135,7 @@ type DraftCategory = {
   name: string;
   type: "income" | "expense";
   color: string;
+  parentId: string;
 };
 
 type DraftSalaryMonth = {
@@ -150,7 +159,7 @@ function isPlanningScreen(value: string | null): value is Exclude<PlanningScreen
 }
 
 function isAccountsSection(value: string | null): value is AccountsSection {
-  return value === "overview" || value === "recurring" || value === "debts";
+  return value === "overview" || value === "normal" || value === "recurring" || value === "debts";
 }
 
 type DraftCard = {
@@ -343,7 +352,7 @@ function getDefaultBoardColumnForPurchase(
     : "later";
 }
 
-const initialMonth = referenceDate.slice(0, 7);
+const initialMonth = getTodayMonthValue();
 const FINANCE_STORAGE_KEY = "monex-app-state-v1";
 const FINANCE_STORAGE_BACKUP_KEY = "monex-app-state-v1-backup";
 type FinancePersistedState = {
@@ -370,6 +379,7 @@ type RemoteSaveStatus = "loading" | "saved" | "saving" | "error";
 const initialDraftTransaction: DraftTransaction = {
   title: "",
   type: "expense",
+  operationKind: "variable",
   amount: "",
   date: `${initialMonth}-14`,
   categoryId: "cat-market",
@@ -404,6 +414,7 @@ const initialDraftCategory: DraftCategory = {
   name: "",
   type: "expense",
   color: "#1d63cf",
+  parentId: "",
 };
 
 const initialDraftCard: DraftCard = {
@@ -478,6 +489,57 @@ function isHiddenUiCategoryId(categoryId?: string) {
   return Boolean(categoryId && hiddenUiCategoryIds.has(categoryId));
 }
 
+function normalizeFixedSection(section: FixedFlowSection): FixedFlowSection {
+  if (section === "Gastos fixos" || section === "Dividas e repasses") {
+    return "Contas";
+  }
+
+  if (section === "Compras planejadas") {
+    return "Planejamento";
+  }
+
+  return section;
+}
+
+function getTodayMonthValue() {
+  const today = new Date();
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function getCategoryFullName(category: Category, categoryList: Category[]) {
+  if (!category.parentId) {
+    return category.name;
+  }
+
+  const parent = categoryList.find((item) => item.id === category.parentId);
+  return parent ? `${parent.name} > ${category.name}` : category.name;
+}
+
+function getCategoryOptionLabel(category: Category) {
+  return category.parentId ? `  ${category.name}` : category.name;
+}
+
+function getSuggestedCardStatementMonth(card: Card | undefined, baseDateValue?: string, fallbackMonth?: string) {
+  if (!card) {
+    return fallbackMonth ?? getTodayMonthValue();
+  }
+
+  const today = new Date();
+  const safeBaseDate = baseDateValue
+    ? new Date(`${baseDateValue.length === 7 ? `${baseDateValue}-01` : baseDateValue}T12:00:00`)
+    : new Date(today.getFullYear(), today.getMonth(), today.getDate(), 12);
+  const baseDate = Number.isNaN(safeBaseDate.getTime())
+    ? new Date(today.getFullYear(), today.getMonth(), today.getDate(), 12)
+    : safeBaseDate;
+  const statementDate = new Date(baseDate);
+
+  if (baseDate.getDate() > card.closingDay) {
+    statementDate.setMonth(statementDate.getMonth() + 1);
+  }
+
+  return `${statementDate.getFullYear()}-${String(statementDate.getMonth() + 1).padStart(2, "0")}`;
+}
+
 const initialDraftFixedEntry: DraftFixedEntry = {
   section: "Ganhos",
   title: "",
@@ -526,13 +588,14 @@ const planningPriorityOptions: FinancePriority[] = [
 
 const fixedSectionOrder: FixedFlowSection[] = [
   "Ganhos",
-  "Gastos fixos",
-  "Dividas e repasses",
-  "Compras planejadas",
+  "Contas",
+  "Planejamento",
 ];
 
 const fixedSectionStyles: Record<FixedFlowSection, string> = {
   Ganhos: "border-emerald-200 bg-emerald-50/80",
+  Contas: "border-rose-200 bg-rose-50/80",
+  Planejamento: "border-violet-200 bg-violet-50/80",
   "Gastos fixos": "border-rose-200 bg-rose-50/80",
   "Dividas e repasses": "border-amber-200 bg-amber-50/80",
   "Compras planejadas": "border-violet-200 bg-violet-50/80",
@@ -540,6 +603,8 @@ const fixedSectionStyles: Record<FixedFlowSection, string> = {
 
 const fixedSectionDisplayLabels: Record<FixedFlowSection, string> = {
   Ganhos: "Ganhos",
+  Contas: "Contas",
+  Planejamento: "Compras planejadas",
   "Gastos fixos": "Contas fixas",
   "Dividas e repasses": "Dividas e repasses",
   "Compras planejadas": "Compras planejadas",
@@ -819,6 +884,8 @@ export function FinanceApp() {
   const [lastRemoteSavedAt, setLastRemoteSavedAt] = useState<string | null>(null);
   const [collapsedFixedSections, setCollapsedFixedSections] = useState<Record<FixedFlowSection, boolean>>({
     Ganhos: false,
+    Contas: false,
+    Planejamento: false,
     "Gastos fixos": false,
     "Dividas e repasses": false,
     "Compras planejadas": false,
@@ -838,6 +905,32 @@ export function FinanceApp() {
 
   function getBankPreset(issuer: string) {
     return bankPresets.find((preset) => preset.issuer === issuer) ?? bankPresets[0];
+  }
+
+  function getSelectableCategories(type: Transaction["type"], options?: { includeHidden?: boolean }) {
+    const includeHidden = options?.includeHidden ?? false;
+    return categories
+      .filter(
+        (category) =>
+          category.type === type &&
+          (includeHidden || !isHiddenUiCategoryId(category.id)) &&
+          (!category.parentId || categories.some((parent) => parent.id === category.parentId)),
+      )
+      .sort((left, right) => {
+        const leftParent = left.parentId ? categories.find((item) => item.id === left.parentId)?.name ?? "" : left.name;
+        const rightParent = right.parentId ? categories.find((item) => item.id === right.parentId)?.name ?? "" : right.name;
+        return `${leftParent}-${left.parentId ? left.name : ""}`.localeCompare(
+          `${rightParent}-${right.parentId ? right.name : ""}`,
+        );
+      });
+  }
+
+  function renderCategoryOptions(type: Transaction["type"], options?: { includeHidden?: boolean }) {
+    return getSelectableCategories(type, options).map((category) => (
+      <option key={category.id} value={category.id}>
+        {getCategoryOptionLabel(category)}
+      </option>
+    ));
   }
 
   const buildPersistedState = useCallback(
@@ -894,6 +987,11 @@ export function FinanceApp() {
     [],
   );
 
+  const clearLocalPersistedCache = useCallback(() => {
+    window.localStorage.removeItem(FINANCE_STORAGE_KEY);
+    window.localStorage.removeItem(FINANCE_STORAGE_BACKUP_KEY);
+  }, []);
+
   const parseLocalPersistedCache = useCallback((): FinancePersistedCache | null => {
     try {
       const raw = window.localStorage.getItem(FINANCE_STORAGE_KEY);
@@ -932,7 +1030,7 @@ export function FinanceApp() {
   }, []);
 
   const applyPersistedState = useCallback((persisted: Partial<FinancePersistedState>) => {
-    if (persisted.selectedMonth) setSelectedMonth(persisted.selectedMonth);
+    setSelectedMonth(getTodayMonthValue());
     if (persisted.accounts) setAccounts(persisted.accounts);
     if (persisted.cards) setCards(persisted.cards);
     if (persisted.transactions) setTransactions(persisted.transactions);
@@ -1049,9 +1147,9 @@ export function FinanceApp() {
     async function hydratePersistedState() {
       const localCache = parseLocalPersistedCache();
       const localState = localCache?.state ?? null;
-      const localUpdatedAt = localCache?.updatedAt;
       setRemoteSaveStatus("loading");
       setRemoteSaveError(null);
+      setHasHydratedRemoteState(false);
 
       try {
         const response = await fetch("/api/app-state", {
@@ -1071,43 +1169,47 @@ export function FinanceApp() {
 
           if (payload.state) {
             const remoteUpdatedAt = payload.updatedAt ?? null;
-            const remoteTimestamp = remoteUpdatedAt ? Date.parse(remoteUpdatedAt) : Number.NEGATIVE_INFINITY;
-            const localTimestamp = localUpdatedAt ? Date.parse(localUpdatedAt) : Number.NEGATIVE_INFINITY;
-
-            const shouldPreferLocalState =
-              localState &&
-              (!localUpdatedAt || (Number.isFinite(localTimestamp) && localTimestamp > remoteTimestamp));
-
-            if (shouldPreferLocalState) {
-              applyPersistedState(localState);
-              pendingRemoteSnapshotRef.current = localState as FinancePersistedState;
-              writeLocalPersistedCache(localState, localUpdatedAt ?? null);
-            } else {
-              applyPersistedState(payload.state);
-              writeLocalPersistedCache(payload.state, remoteUpdatedAt);
-              setLastRemoteSavedAt(remoteUpdatedAt);
-              setRemoteSaveStatus("saved");
-            }
+            pendingRemoteSnapshotRef.current = null;
+            applyPersistedState(payload.state);
+            clearLocalPersistedCache();
+            writeLocalPersistedCache(payload.state, remoteUpdatedAt);
+            setLastRemoteSavedAt(remoteUpdatedAt);
+            setRemoteSaveStatus("saved");
+            setHasHydratedRemoteState(true);
             return;
           }
+
+          pendingRemoteSnapshotRef.current = null;
+          clearLocalPersistedCache();
+          setLastRemoteSavedAt(payload.updatedAt ?? null);
+          setRemoteSaveStatus("saved");
+          setHasHydratedRemoteState(true);
+          return;
         }
 
         if (localState) {
           applyPersistedState(localState);
-          pendingRemoteSnapshotRef.current = localState as FinancePersistedState;
-          writeLocalPersistedCache(localState, localUpdatedAt ?? null);
+          pendingRemoteSnapshotRef.current = null;
+          setRemoteSaveStatus("error");
+          setRemoteSaveError("Supabase indisponivel. Cache local usado apenas como leitura temporaria.");
         } else {
-          setRemoteSaveStatus("saved");
+          setRemoteSaveStatus("error");
+          setRemoteSaveError(`Supabase respondeu ${response.status}. Nenhum cache local foi aplicado.`);
         }
       } catch (error) {
-        setRemoteSaveStatus(localState ? "error" : "saved");
+        if (localState) {
+          applyPersistedState(localState);
+        }
+        pendingRemoteSnapshotRef.current = null;
+        setRemoteSaveStatus("error");
         setRemoteSaveError(
-          error instanceof Error ? error.message : "Nao foi possivel carregar dados do Supabase.",
+          error instanceof Error
+            ? `${error.message}. Cache local usado apenas como leitura temporaria.`
+            : "Nao foi possivel carregar dados do Supabase.",
         );
       } finally {
         if (!isCancelled) {
           setHasLoadedPersistedState(true);
-          setHasHydratedRemoteState(true);
         }
       }
     }
@@ -1117,7 +1219,7 @@ export function FinanceApp() {
     return () => {
       isCancelled = true;
     };
-  }, [applyPersistedState, parseLocalPersistedCache, writeLocalPersistedCache]);
+  }, [applyPersistedState, clearLocalPersistedCache, parseLocalPersistedCache, writeLocalPersistedCache]);
 
   useEffect(() => {
     if (!hasLoadedPersistedState) {
@@ -1184,7 +1286,7 @@ export function FinanceApp() {
       const groupedByMonth = transactions
         .filter((transaction) => transaction.cardId === card.id && transaction.cardMode === "credit")
         .reduce<Record<string, number>>((accumulator, transaction) => {
-          const monthValue = transaction.date.slice(0, 7);
+          const monthValue = getSuggestedCardStatementMonth(card, transaction.date, transaction.date.slice(0, 7));
           accumulator[monthValue] = (accumulator[monthValue] ?? 0) + transaction.amount;
           return accumulator;
         }, {});
@@ -1249,9 +1351,7 @@ export function FinanceApp() {
   const billsForDisplay: BillDisplayItem[] = manualBillsForDisplay.sort((left, right) =>
     left.bill.dueDate.localeCompare(right.bill.dueDate),
   );
-  const selectableBillCategories = categories.filter(
-    (category) => category.type === "expense" && !isHiddenUiCategoryId(category.id),
-  );
+  const selectableBillCategories = getSelectableCategories("expense");
   const defaultBillCategoryId =
     selectableBillCategories[0]?.id ??
     categories.find((category) => category.type === "expense")?.id ??
@@ -1312,7 +1412,14 @@ export function FinanceApp() {
   );
   const categoryBreakdown = getCategoryBreakdown(transactions, referenceMonthDate);
   const monthlyTrend = getMonthlyTrend(transactions);
-  const cardSummaries = getCardSummaries(cards, transactions, referenceMonthDate);
+  const getOpenCardStatementTotal = (cardId: string, fromMonthValue = selectedMonth) =>
+    autoCardBills
+      .filter((item) => item.cardId === cardId && item.statementMonth >= fromMonthValue)
+      .reduce((sum, item) => sum + item.bill.amount, 0);
+  const cardSummaries = getCardSummaries(cards, transactions, referenceMonthDate).map((card) => ({
+    ...card,
+    availableLimit: Math.max(0, card.creditLimit - getOpenCardStatementTotal(card.id, selectedMonth)),
+  }));
   const upcomingInstallments = getUpcomingInstallments(
     transactions,
     new Date(`${referenceDate}T12:00:00`),
@@ -1345,6 +1452,9 @@ export function FinanceApp() {
       purchase.status !== "bought" &&
       !realizedPlannedPurchaseIds.has(purchase.id),
   );
+  const reservePurchases = activePlannedPurchases.filter(
+    (purchase) => purchase.planningMode === "save_over_time",
+  );
   const totalPlannedPurchaseValue = activePlannedPurchases.reduce(
     (sum, purchase) => sum + purchase.estimatedValue,
     0,
@@ -1354,6 +1464,12 @@ export function FinanceApp() {
     0,
   );
   const totalReserveGap = activePlannedPurchases.reduce(
+    (sum, purchase) => sum + Math.max(0, purchase.estimatedValue - purchase.savedAmount),
+    0,
+  );
+  const totalReserveTarget = reservePurchases.reduce((sum, purchase) => sum + purchase.estimatedValue, 0);
+  const totalReserveSaved = reservePurchases.reduce((sum, purchase) => sum + purchase.savedAmount, 0);
+  const totalReserveRemaining = reservePurchases.reduce(
     (sum, purchase) => sum + Math.max(0, purchase.estimatedValue - purchase.savedAmount),
     0,
   );
@@ -1464,14 +1580,6 @@ export function FinanceApp() {
 
   const salaryCalendarMonths = buildYearMonths(referenceMonthDate.getFullYear());
   const monthlyGridRows = createMonthlyGridRows();
-  const fixedEntriesByCardId = fixedEntries.reduce<Record<string, FixedFlowEntry[]>>((accumulator, entry) => {
-    if (entry.paymentMethod !== "credit_card" || !entry.cardId || !entry.linkedBillGroupId) {
-      return accumulator;
-    }
-
-    accumulator[entry.cardId] = [...(accumulator[entry.cardId] ?? []), entry];
-    return accumulator;
-  }, {});
   const fixedMonthEntries = monthlyGridRows.filter((entry) => (entry.amountByMonth[selectedMonth] ?? 0) > 0);
   const fixedMonthCompletedCount = fixedMonthEntries.filter((entry) =>
     entry.completedMonths.includes(selectedMonth),
@@ -1494,7 +1602,7 @@ export function FinanceApp() {
         return false;
       }
 
-      return fixedEntries.find((item) => item.id === entry.sourceId)?.kind === "income";
+      return (fixedEntries.find((item) => item.id === entry.sourceId)?.kind ?? "expense") === "income";
     })
     .reduce((sum, entry) => sum + (entry.amountByMonth[selectedMonth] ?? 0), 0);
   const fixedMonthPlannedExpense = fixedMonthEntries
@@ -1507,7 +1615,7 @@ export function FinanceApp() {
         return true;
       }
 
-      return fixedEntries.find((item) => item.id === entry.sourceId)?.kind === "expense";
+      return (fixedEntries.find((item) => item.id === entry.sourceId)?.kind ?? "expense") === "expense";
     })
     .reduce((sum, entry) => sum + (entry.amountByMonth[selectedMonth] ?? 0), 0);
 
@@ -1526,7 +1634,9 @@ export function FinanceApp() {
                 (transaction) =>
                   transaction.cardId === selectedCardDetail.id && transaction.cardMode === "credit",
               )
-              .map((transaction) => transaction.date.slice(0, 7)),
+              .map((transaction) =>
+                getSuggestedCardStatementMonth(selectedCardDetail, transaction.date, transaction.date.slice(0, 7)),
+              ),
           ],
         ),
       ).sort((left, right) => left.localeCompare(right))
@@ -1537,7 +1647,8 @@ export function FinanceApp() {
           (transaction) =>
             transaction.cardId === selectedCardDetail.id &&
             transaction.cardMode === "credit" &&
-            transaction.date.slice(0, 7) === selectedCardStatementMonth,
+            getSuggestedCardStatementMonth(selectedCardDetail, transaction.date, transaction.date.slice(0, 7)) ===
+              selectedCardStatementMonth,
         )
         .sort((left, right) => left.date.localeCompare(right.date))
     : [];
@@ -1548,14 +1659,12 @@ export function FinanceApp() {
     (sum, transaction) => sum + transaction.amount,
     0,
   );
-  const selectedCardStatementSummary =
-    selectedCardDetail && selectedCardStatementMonth
-      ? getCardSummaries(
-          [selectedCardDetail],
-          transactions,
-          monthValueToDate(selectedCardStatementMonth),
-        )[0]
-      : null;
+  const selectedCardOpenStatementTotal = selectedCardDetail
+    ? getOpenCardStatementTotal(selectedCardDetail.id, selectedCardStatementMonth)
+    : 0;
+  const selectedCardAvailableLimit = selectedCardDetail
+    ? Math.max(0, selectedCardDetail.creditLimit - selectedCardOpenStatementTotal)
+    : 0;
   const selectedCardStatementAutoBill = selectedCardDetail
     ? autoCardBills.find(
         (item) =>
@@ -1620,7 +1729,7 @@ export function FinanceApp() {
 
     return {
       id: existingEntry?.id ?? `fixed-bill-group-${primaryBill.recurringGroupId ?? primaryBill.id}`,
-      section: existingEntry?.section ?? "Gastos fixos",
+      section: "Contas",
       title: primaryBill.title,
       kind: "expense",
       categoryId: primaryBill.categoryId,
@@ -1663,7 +1772,7 @@ export function FinanceApp() {
       const existingIndex = nextEntries.findIndex(
         (entry) =>
           entry.linkedBillGroupId === groupId ||
-          (entry.section === "Gastos fixos" &&
+          (normalizeFixedSection(entry.section) === "Contas" &&
             entry.title === primaryBill.title &&
             entry.categoryId === primaryBill.categoryId),
       );
@@ -1713,12 +1822,17 @@ export function FinanceApp() {
           existingEntry?.amountByMonth ??
           Object.fromEntries(salaryCalendarMonths.map((monthItem) => [monthItem.monthValue, 0]));
         const nextAmountByMonth = { ...previousAmounts };
+        const hasExplicitMonthlyPlan = Boolean(
+          investment.plannedAmountByMonth && Object.keys(investment.plannedAmountByMonth).length,
+        );
 
         salaryCalendarMonths.forEach((monthItem) => {
           const isManualOverride = existingEntry?.manualAmountMonths?.includes(monthItem.monthValue);
-          nextAmountByMonth[monthItem.monthValue] = isManualOverride
-            ? previousAmounts[monthItem.monthValue] ?? 0
-            : investment.monthlyTarget;
+          nextAmountByMonth[monthItem.monthValue] = hasExplicitMonthlyPlan
+            ? investment.plannedAmountByMonth?.[monthItem.monthValue] ?? 0
+            : isManualOverride
+              ? previousAmounts[monthItem.monthValue] ?? 0
+              : investment.monthlyTarget;
         });
 
         const contributionByMonth = investment.contributions.reduce<Record<string, number>>(
@@ -1736,7 +1850,7 @@ export function FinanceApp() {
 
         const syncedEntry: FixedFlowEntry = {
           id: existingEntry?.id ?? `fixed-investment-${investment.id}`,
-          section: "Gastos fixos",
+          section: "Contas",
           title: `Aporte ${investment.name}`,
           kind: "expense",
           categoryId: category?.id ?? "cat-invest",
@@ -1750,14 +1864,19 @@ export function FinanceApp() {
           linkedBillGroupId: undefined,
           linkedInvestmentId: investment.id,
           syncCardLimit: false,
-          manualAmountMonths: existingEntry?.manualAmountMonths ?? [],
+          manualAmountMonths: [
+            ...new Set([
+              ...(existingEntry?.manualAmountMonths ?? []),
+              ...Object.keys(investment.plannedAmountByMonth ?? {}),
+            ]),
+          ],
           notes: investment.notes || investment.objective || undefined,
         };
 
         if (existingIndex >= 0) {
           nextEntries[existingIndex] = syncedEntry;
         } else {
-          nextEntries.unshift(syncedEntry);
+          nextEntries.push(syncedEntry);
         }
       });
 
@@ -1802,7 +1921,7 @@ export function FinanceApp() {
 
         return {
           ...entry,
-          section: "Dividas e repasses" as FixedFlowSection,
+          section: "Contas" as FixedFlowSection,
           title: linkedDebt.name,
           categoryId: debtCategory?.id ?? entry.categoryId,
           categoryName: debtCategory?.name ?? entry.categoryName,
@@ -2006,6 +2125,25 @@ export function FinanceApp() {
     }));
   }
 
+  function getOperationDefaultCategoryId(operationKind: DraftTransaction["operationKind"], type: Transaction["type"]) {
+    if (type === "income") {
+      return categories.find((category) => category.type === "income")?.id ?? "cat-salary";
+    }
+
+    if (operationKind === "investment") {
+      return categories.find((category) => category.id === "cat-invest")?.id ?? "cat-invest";
+    }
+
+    if (operationKind === "debt_payment") {
+      return categories.find((category) => category.id === "cat-debt")?.id ?? "cat-debt";
+    }
+
+    return (
+      categories.find((category) => category.type === "expense" && !isHiddenUiCategoryId(category.id))?.id ??
+      "cat-market"
+    );
+  }
+
   function handleAddTransaction(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -2023,9 +2161,154 @@ export function FinanceApp() {
     setTransactions((current) =>
       [...nextTransactions, ...current].sort((left, right) => right.date.localeCompare(left.date)),
     );
+
+    if (draftTransaction.type === "expense") {
+      const firstTransaction = nextTransactions[0];
+      const paymentDetails = {
+        paymentMethod: firstTransaction.paymentMethod,
+        accountId: firstTransaction.accountId,
+        cardId: firstTransaction.cardId,
+        cardMode: firstTransaction.cardMode,
+      };
+
+      if (draftTransaction.operationKind === "basic_bill" || draftTransaction.operationKind === "recurring_bill") {
+        const isRecurring = draftTransaction.operationKind === "recurring_bill";
+        const billId = crypto.randomUUID();
+        const recurringGroupId = isRecurring ? `recurring-${billId}` : undefined;
+        const baseBill: Bill = {
+          id: billId,
+          title: draftTransaction.title.trim(),
+          amount,
+          categoryId: category.id,
+          categoryName: category.name,
+          dueDate: draftTransaction.date,
+          priority: "Alta",
+          status: "paid",
+          isRecurring,
+          recurringDay: isRecurring ? Number(draftTransaction.date.slice(8, 10)) : undefined,
+          recurringGroupId,
+          ...mapFixedPaymentMethodToBillPlan(
+            paymentDetails.paymentMethod,
+            paymentDetails.cardId,
+            paymentDetails.cardMode,
+          ),
+          installments:
+            paymentDetails.paymentMethod === "credit_card" && draftTransaction.installments > 1
+              ? draftTransaction.installments
+              : undefined,
+          notes: draftTransaction.description.trim() || undefined,
+        };
+        const billsToAdd = isRecurring
+          ? salaryCalendarMonths.map((monthItem) => ({
+              ...baseBill,
+              id:
+                monthItem.monthValue === draftTransaction.date.slice(0, 7)
+                  ? baseBill.id
+                  : `${baseBill.id}-${monthItem.monthValue}`,
+              dueDate: alignDateToDay(
+                `${monthItem.monthValue}-01`,
+                Number(draftTransaction.date.slice(8, 10)),
+              ),
+              status:
+                monthItem.monthValue === draftTransaction.date.slice(0, 7)
+                  ? ("paid" as const)
+                  : ("pending" as const),
+            }))
+          : [baseBill];
+        setBills((current) => [...billsToAdd, ...current].sort((left, right) => left.dueDate.localeCompare(right.dueDate)));
+      }
+
+      if (draftTransaction.operationKind === "investment") {
+        const investmentId = crypto.randomUUID();
+        setInvestments((current) => [
+          {
+            id: investmentId,
+            name: draftTransaction.title.trim(),
+            type: "Investimento",
+            objective: draftTransaction.description.trim() || undefined,
+            totalGrossInvested: amount,
+            currentManualValue: amount,
+            monthlyTarget: amount,
+            paymentMethod: paymentDetails.paymentMethod,
+            accountId: paymentDetails.accountId,
+            cardId: paymentDetails.cardId,
+            cardMode: paymentDetails.cardMode,
+            plannedAmountByMonth: { [draftTransaction.date.slice(0, 7)]: amount },
+            contributions: [
+              {
+                id: crypto.randomUUID(),
+                contributionDate: draftTransaction.date,
+                monthValue: draftTransaction.date.slice(0, 7),
+                amount,
+                source: "manual",
+                linkedTransactionId: firstTransaction.id,
+                paymentMethod: paymentDetails.paymentMethod,
+                accountId: paymentDetails.accountId,
+                cardId: paymentDetails.cardId,
+                cardMode: paymentDetails.cardMode,
+                notes: draftTransaction.description.trim() || undefined,
+              },
+            ],
+          },
+          ...current,
+        ]);
+      }
+
+      if (draftTransaction.operationKind === "debt_payment") {
+        setDebts((current) => {
+          const existingDebt = current.find(
+            (debt) => debt.name.trim().toLowerCase() === draftTransaction.title.trim().toLowerCase(),
+          );
+
+          if (existingDebt) {
+            const paidAmount = Number((existingDebt.paidAmount + amount).toFixed(2));
+            const remainingAmount = Math.max(0, Number((existingDebt.totalAmount - paidAmount).toFixed(2)));
+            return current.map((debt) =>
+              debt.id === existingDebt.id
+                ? {
+                    ...debt,
+                    paidAmount,
+                    remainingAmount,
+                    paidInstallments: Math.min(debt.totalInstallments, debt.paidInstallments + 1),
+                    status: remainingAmount <= 0 ? "settled" : debt.status,
+                    nextDueDate: addMonthsToDateValue(draftTransaction.date, 1),
+                  }
+                : debt,
+            );
+          }
+
+          const debtId = crypto.randomUUID();
+          return [
+            {
+              id: debtId,
+              name: draftTransaction.title.trim(),
+              description: draftTransaction.description.trim() || undefined,
+              totalAmount: amount,
+              paidAmount: amount,
+              remainingAmount: 0,
+              totalInstallments: 1,
+              paidInstallments: 1,
+              installmentAmount: amount,
+              nextDueDate: draftTransaction.date,
+              priority: "Alta",
+              status: "settled",
+              plannedPaymentMethod:
+                paymentDetails.paymentMethod === "credit_card" || paymentDetails.paymentMethod === "debit_card"
+                  ? "card"
+                  : (paymentDetails.paymentMethod as Exclude<PaymentPlanMethod, "card">),
+              plannedCardId: paymentDetails.cardId,
+              notes: "Criada automaticamente a partir de Transacoes.",
+            },
+            ...current,
+          ];
+        });
+      }
+    }
+
     setDraftTransaction((current) => ({
       ...current,
       title: "",
+      operationKind: current.type === "income" ? "income" : "variable",
       amount: "",
       description: "",
       installments: 1,
@@ -2266,6 +2549,7 @@ export function FinanceApp() {
             name: category.name,
             type: category.type,
             color: category.color,
+            parentId: category.parentId ?? "",
           }
         : initialDraftCategory,
     );
@@ -2297,11 +2581,18 @@ export function FinanceApp() {
       name: draftCategory.name.trim(),
       type: draftCategory.type,
       color: draftCategory.color,
+      parentId: draftCategory.parentId || undefined,
     };
 
     setCategories((current) => {
       if (editingCategoryId) {
-        return current.map((category) => (category.id === editingCategoryId ? nextCategory : category));
+        return current.map((category) =>
+          category.id === editingCategoryId
+            ? nextCategory
+            : category.parentId === editingCategoryId && category.type !== nextCategory.type
+              ? { ...category, type: nextCategory.type }
+              : category,
+        );
       }
 
       return [...current, nextCategory];
@@ -2351,7 +2642,11 @@ export function FinanceApp() {
       return;
     }
 
-    setCategories((current) => current.filter((item) => item.id !== categoryId));
+    setCategories((current) =>
+      current
+        .filter((item) => item.id !== categoryId)
+        .map((item) => (item.parentId === categoryId ? { ...item, parentId: undefined } : item)),
+    );
 
     setTransactions((current) =>
       current.map((transaction) =>
@@ -2457,6 +2752,11 @@ export function FinanceApp() {
   }
 
   function getDisplayCategoryName(categoryId: string | undefined, categoryName: string | undefined) {
+    const category = categories.find((item) => item.id === categoryId);
+    if (category) {
+      return getCategoryFullName(category, categories);
+    }
+
     if (categoryId === "cat-bills" || categoryName === "Contas a pagar") {
       return "Fatura do cartao";
     }
@@ -2874,12 +3174,22 @@ export function FinanceApp() {
   function openCardDetails(cardId: string, statementMonth?: string) {
     const cardTransactions = transactions
       .filter((transaction) => transaction.cardId === cardId && transaction.cardMode === "credit")
-      .map((transaction) => transaction.date.slice(0, 7))
+      .map((transaction) =>
+        getSuggestedCardStatementMonth(
+          cards.find((card) => card.id === cardId),
+          transaction.date,
+          transaction.date.slice(0, 7),
+        ),
+      )
       .sort((left, right) => left.localeCompare(right));
+    const card = cards.find((item) => item.id === cardId);
 
     updateHomeLocation("cards", {
       cardId,
-      statementMonth: statementMonth ?? cardTransactions.at(-1) ?? selectedMonth,
+      statementMonth:
+        statementMonth ??
+        cardTransactions.at(-1) ??
+        getSuggestedCardStatementMonth(card, selectedMonth ? `${selectedMonth}-01` : undefined, selectedMonth),
     });
   }
 
@@ -3170,6 +3480,16 @@ export function FinanceApp() {
     }
   }
 
+  function handleDeleteDebt(debtId: string) {
+    setDebts((current) => current.filter((debt) => debt.id !== debtId));
+    setFixedEntries((current) => current.filter((entry) => entry.linkedDebtId !== debtId));
+    setIsDebtPlanModalOpen(false);
+
+    if (editingDebtId === debtId) {
+      closeDebtModal();
+    }
+  }
+
   function handleApplyDebtPlan(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -3229,7 +3549,7 @@ export function FinanceApp() {
     );
     const nextEntry: FixedFlowEntry = {
       id: linkedEntry?.id ?? `fixed-debt-${debt.id}`,
-      section: "Dividas e repasses",
+      section: "Contas",
       title: debt.name,
       kind: "expense",
       categoryId: debtCategory.id,
@@ -3391,17 +3711,16 @@ export function FinanceApp() {
       );
     }
 
-    if (section === "Dividas e repasses") {
+    if (normalizeFixedSection(section) === "Contas") {
       return (
-        categories.find((category) => category.id === "cat-debt")?.id ??
-        categories.find((category) => category.name === "Dividas")?.id ??
+        categories.find((category) => category.type === "expense" && !isHiddenUiCategoryId(category.id))?.id ??
         categories.find((category) => category.type === "expense")?.id ??
         initialDraftBill.categoryId
       );
     }
 
     return (
-      categories.find((category) => category.id === "cat-bills")?.id ??
+      categories.find((category) => category.type === "expense" && !isHiddenUiCategoryId(category.id))?.id ??
       categories.find((category) => category.type === "expense")?.id ??
       initialDraftBill.categoryId
     );
@@ -3542,12 +3861,105 @@ export function FinanceApp() {
     };
   }
 
+  type CardStatementGridItem = {
+    id: string;
+    title: string;
+    amount: number;
+    support: string;
+    sortKey: string;
+  };
+
+  function getCardStatementGridItems(cardId: string, statementMonth: string): CardStatementGridItem[] {
+    const card = cards.find((item) => item.id === cardId);
+    if (!card) {
+      return [];
+    }
+
+    const transactionItems = transactions
+      .filter(
+        (transaction) =>
+          transaction.type === "expense" &&
+          transaction.cardId === cardId &&
+          transaction.cardMode === "credit" &&
+          getSuggestedCardStatementMonth(card, transaction.date, transaction.date.slice(0, 7)) === statementMonth,
+      )
+      .map((transaction, index) => {
+        const sourceBill = transaction.sourceBillId
+          ? bills.find((bill) => bill.id === transaction.sourceBillId)
+          : undefined;
+        const baseSourceLabel = sourceBill?.isRecurring
+          ? "Conta recorrente"
+          : sourceBill
+            ? "Conta"
+            : "Transacao";
+        const sourceLabel = transaction.installmentTotal
+          ? `${baseSourceLabel} - Parcela ${transaction.installmentNumber ?? 1}/${transaction.installmentTotal}`
+          : baseSourceLabel;
+
+        return {
+          id: `transaction-${transaction.id}`,
+          title: transaction.title,
+          amount: transaction.amount,
+          support: sourceLabel,
+          sortKey: `${transaction.date}-${String(index).padStart(4, "0")}`,
+        };
+      });
+
+    const transactionBillIds = new Set(
+      transactions
+        .filter(
+          (transaction) =>
+            transaction.type === "expense" &&
+            transaction.cardId === cardId &&
+            transaction.cardMode === "credit" &&
+            transaction.sourceBillId &&
+            getSuggestedCardStatementMonth(card, transaction.date, transaction.date.slice(0, 7)) === statementMonth,
+        )
+        .map((transaction) => transaction.sourceBillId),
+    );
+
+    const billItems = bills
+      .filter(
+        (bill) =>
+          isCreditLinkedBill(bill) &&
+          bill.plannedCardId === cardId &&
+          !transactionBillIds.has(bill.id) &&
+          getSuggestedCardStatementMonth(card, bill.dueDate, bill.dueDate.slice(0, 7)) === statementMonth,
+      )
+      .map((bill, index) => ({
+        id: `bill-${bill.id}`,
+        title: bill.title,
+        amount: bill.amount,
+        support: bill.isRecurring ? "Conta recorrente" : "Conta",
+        sortKey: `${bill.dueDate}-${String(index).padStart(4, "0")}`,
+      }));
+
+    return [...transactionItems, ...billItems].sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+  }
+
   function createMonthlyGridRows(): MonthlyGridRow[] {
+    const hasPendingAmountFromSelectedMonth = (entry: FixedFlowEntry) =>
+      salaryCalendarMonths.some((monthItem) => {
+        const amount = entry.amountByMonth[monthItem.monthValue] ?? 0;
+        return (
+          monthItem.monthValue >= selectedMonth &&
+          amount > 0 &&
+          !entry.completedMonths.includes(monthItem.monthValue)
+        );
+      });
     const fixedRows: MonthlyGridRow[] = fixedEntries
       .filter((entry) => !(entry.linkedBillGroupId && entry.paymentMethod === "credit_card" && entry.cardId))
+      .filter((entry) => {
+        if (entry.section === "Ganhos") {
+          return true;
+        }
+
+        const hasAnyScheduledAmount = Object.values(entry.amountByMonth).some((amount) => amount > 0);
+        return !hasAnyScheduledAmount || hasPendingAmountFromSelectedMonth(entry);
+      })
       .map((entry) => ({
         id: `fixed-grid-${entry.id}`,
-        section: entry.section,
+        section: normalizeFixedSection(entry.section),
         sourceType: "fixed",
         sourceId: entry.id,
         title: entry.title,
@@ -3565,6 +3977,49 @@ export function FinanceApp() {
         amountByMonth: entry.amountByMonth,
         completedMonths: entry.completedMonths,
       }));
+    const linkedBillEntryIds = new Set(
+      fixedEntries
+        .map((entry) => entry.linkedBillGroupId)
+        .filter((value): value is string => Boolean(value)),
+    );
+    const standaloneBillRows: MonthlyGridRow[] = bills
+      .filter((bill) => !bill.isRecurring && !isCreditLinkedBill(bill))
+      .filter((bill) => !linkedBillEntryIds.has(bill.id))
+      .map((bill) => {
+        const amountByMonth = Object.fromEntries(
+          salaryCalendarMonths.map((monthItem) => [
+            monthItem.monthValue,
+            monthItem.monthValue === bill.dueDate.slice(0, 7) ? bill.amount : 0,
+          ]),
+        ) as Record<string, number>;
+        const paymentDetails = getPlannedPaymentDetails(
+          bill.plannedPaymentMethod,
+          bill.plannedCardId,
+          bill.plannedCardMode ?? "credit",
+          cards,
+        );
+
+        return {
+          id: `bill-grid-${bill.id}`,
+          section: "Contas" as FixedFlowSection,
+          sourceType: "fixed" as const,
+          sourceId: bill.id,
+          title: bill.title,
+          categoryId: bill.categoryId,
+          categoryName: bill.categoryName,
+          paymentMethod: paymentDetails.transactionMethod,
+          accountId: settings.defaultAccountId,
+          cardId: paymentDetails.cardId,
+          cardMode: paymentDetails.cardMode,
+          linkedBillGroupId: bill.id,
+          linkedDebtId: undefined,
+          linkedInvestmentId: undefined,
+          syncCardLimit: false,
+          notes: bill.notes,
+          amountByMonth,
+          completedMonths: bill.status === "paid" ? [bill.dueDate.slice(0, 7)] : [],
+        };
+      });
     const cardAutoRows: MonthlyGridRow[] = cards
       .filter((card) => card.availableMode !== "debit")
       .map((card) => {
@@ -3574,12 +4029,12 @@ export function FinanceApp() {
         ) as Record<string, number>;
 
         relatedBills.forEach((item) => {
-          amountByMonth[item.bill.dueDate.slice(0, 7)] = item.bill.amount;
+          amountByMonth[item.statementMonth] = item.bill.amount;
         });
 
         return {
           id: `card-auto-grid-${card.id}`,
-          section: "Gastos fixos" as FixedFlowSection,
+          section: "Contas" as FixedFlowSection,
           sourceType: "card_auto_bill" as const,
           sourceId: card.id,
           title: `Fatura ${card.name}`,
@@ -3615,7 +4070,7 @@ export function FinanceApp() {
 
         return {
           id: `purchase-grid-${purchase.id}`,
-          section: "Compras planejadas",
+          section: "Planejamento",
           sourceType: "planned_purchase",
           sourceId: purchase.id,
           title: purchase.name,
@@ -3633,12 +4088,12 @@ export function FinanceApp() {
         };
       });
 
-    return [...fixedRows, ...cardAutoRows, ...purchaseRows];
+    return [...fixedRows, ...standaloneBillRows, ...cardAutoRows, ...purchaseRows];
   }
 
   function createFixedEntryDraft(section: FixedFlowSection, entry?: FixedFlowEntry): DraftFixedEntry {
     return {
-      section,
+      section: normalizeFixedSection(section),
       title: entry?.title ?? "",
       categoryId: entry?.categoryId ?? getDefaultCategoryIdForFixedSection(section),
       paymentMethod: entry?.paymentMethod ?? (section === "Ganhos" ? "pix" : "pix"),
@@ -3653,7 +4108,7 @@ export function FinanceApp() {
 
   function openFixedEntryModal(section: FixedFlowSection, entry?: FixedFlowEntry) {
     setEditingFixedEntryId(entry?.id ?? null);
-    setDraftFixedEntry(createFixedEntryDraft(section, entry));
+    setDraftFixedEntry(createFixedEntryDraft(normalizeFixedSection(section), entry));
     setIsFixedEntryModalOpen(true);
   }
 
@@ -3732,6 +4187,7 @@ export function FinanceApp() {
     const currentManualValue =
       Number(draftInvestment.currentManualValue.replace(",", ".")) || totalGrossInvested;
     const monthlyTarget = Number(draftInvestment.monthlyTarget.replace(",", ".")) || 0;
+    const existingInvestment = investments.find((investment) => investment.id === editingInvestmentId);
 
     const nextInvestment: Investment = {
       id: editingInvestmentId ?? crypto.randomUUID(),
@@ -3751,9 +4207,9 @@ export function FinanceApp() {
         draftInvestment.paymentMethod === "credit_card" || draftInvestment.paymentMethod === "debit_card"
           ? draftInvestment.cardMode
           : undefined,
+      plannedAmountByMonth: existingInvestment?.plannedAmountByMonth,
       notes: draftInvestment.notes.trim() || undefined,
-      contributions:
-        investments.find((investment) => investment.id === editingInvestmentId)?.contributions ?? [],
+      contributions: existingInvestment?.contributions ?? [],
     };
 
     setInvestments((current) => {
@@ -3842,6 +4298,10 @@ export function FinanceApp() {
                 draftInvestmentContribution.paymentMethod === "debit_card"
                   ? draftInvestmentContribution.cardMode
                   : undefined,
+              plannedAmountByMonth: {
+                ...(item.plannedAmountByMonth ?? {}),
+                [monthValue]: amount,
+              },
               contributions: [...item.contributions, nextContribution].sort((left, right) =>
                 left.contributionDate.localeCompare(right.contributionDate),
               ),
@@ -3894,7 +4354,16 @@ export function FinanceApp() {
         ? salaryCalendarMonths
             .map((monthItem) => monthItem.monthValue)
             .filter((monthValue) => normalizedAmountByMonth[monthValue] !== linkedCard.creditLimit)
-        : [];
+        : existingEntry?.linkedInvestmentId
+          ? salaryCalendarMonths
+              .map((monthItem) => monthItem.monthValue)
+              .filter(
+                (monthValue) =>
+                  normalizedAmountByMonth[monthValue] !==
+                  investments.find((investment) => investment.id === existingEntry.linkedInvestmentId)
+                    ?.monthlyTarget,
+              )
+          : [];
 
     const nextEntry: FixedFlowEntry = {
       id:
@@ -3907,7 +4376,7 @@ export function FinanceApp() {
           .normalize("NFD")
           .replace(/[^\w\s-]/g, "")
           .replace(/\s+/g, "-")}`,
-      section: draftFixedEntry.section,
+      section: normalizeFixedSection(draftFixedEntry.section),
       title: draftFixedEntry.title.trim(),
       kind: getFixedEntryKind(draftFixedEntry.section),
       categoryId: category.id,
@@ -3996,6 +4465,19 @@ export function FinanceApp() {
         });
 
       setTransactions((current) => rebuildTransactionsForBills(current, nextBillsGroup));
+    }
+
+    if (nextEntry.linkedInvestmentId) {
+      setInvestments((current) =>
+        current.map((investment) =>
+          investment.id === nextEntry.linkedInvestmentId
+            ? {
+                ...investment,
+                plannedAmountByMonth: nextEntry.amountByMonth,
+              }
+            : investment,
+        ),
+      );
     }
 
     closeFixedEntryModal();
@@ -4184,10 +4666,15 @@ export function FinanceApp() {
           const totalGrossInvested = Number(
             nextContributions.reduce((sum, contribution) => sum + contribution.amount, 0).toFixed(2),
           );
+          const nextPlannedAmountByMonth = {
+            ...(investment.plannedAmountByMonth ?? {}),
+            [contributionMonth]: nextAmount,
+          };
 
           return {
             ...investment,
             totalGrossInvested,
+            plannedAmountByMonth: nextPlannedAmountByMonth,
             contributions: nextContributions,
           };
         }),
@@ -4288,6 +4775,33 @@ export function FinanceApp() {
                 `${monthValue}-${item.desiredDate?.slice(8, 10) ?? "28"}`,
                 Number(item.desiredDate?.slice(8, 10) ?? "28"),
               ),
+            }
+          : item,
+      ),
+    );
+  }
+
+  function handleMonthlyGridAmountChange(row: MonthlyGridRow, monthValue: string, rawValue: string) {
+    const entry = fixedEntries.find((item) => item.id === row.sourceId);
+    if (entry) {
+      handleFixedEntryAmountChange(entry.id, monthValue, rawValue);
+      return;
+    }
+
+    const bill = bills.find((item) => item.id === row.sourceId);
+    if (!bill) {
+      return;
+    }
+
+    const parsedValue = Number(rawValue.replace(",", ".")) || 0;
+    const nextAmount = Math.max(0, Number(parsedValue.toFixed(2)));
+    setBills((current) =>
+      current.map((item) =>
+        item.id === bill.id
+          ? {
+              ...item,
+              amount: nextAmount,
+              dueDate: alignDateToDay(`${monthValue}-01`, Number(item.dueDate.slice(8, 10))),
             }
           : item,
       ),
@@ -4623,6 +5137,24 @@ export function FinanceApp() {
 
     const entry = fixedEntries.find((item) => item.id === row.sourceId);
     if (!entry) {
+      const bill = bills.find((item) => item.id === row.sourceId);
+      if (bill) {
+        const sourceAmount = row.amountByMonth[sourceMonthValue] ?? 0;
+        if (sourceAmount <= 0) {
+          return;
+        }
+
+        setBills((current) =>
+          current.map((item) =>
+            item.id === bill.id
+              ? {
+                  ...item,
+                  dueDate: alignDateToDay(`${targetMonthValue}-01`, Number(item.dueDate.slice(8, 10))),
+                }
+              : item,
+          ),
+        );
+      }
       return;
     }
 
@@ -4735,6 +5267,11 @@ export function FinanceApp() {
 
           return {
             ...investment,
+            plannedAmountByMonth: {
+              ...(investment.plannedAmountByMonth ?? {}),
+              [sourceMonthValue]: targetAmount,
+              [targetMonthValue]: sourceAmount,
+            },
             contributions: nextContributions,
           };
         }),
@@ -4789,7 +5326,7 @@ export function FinanceApp() {
 
   function openMonthlyGridRowModal(row: MonthlyGridRow) {
     if (row.sourceType === "card_auto_bill") {
-      openCardDetails(row.sourceId, getMonthValueOffset(selectedMonth, -1));
+      openCardDetails(row.sourceId, selectedMonth);
       return;
     }
 
@@ -4801,10 +5338,17 @@ export function FinanceApp() {
 
     const entry = fixedEntries.find((item) => item.id === row.sourceId);
     if (!entry) {
+      const bill = bills.find((item) => item.id === row.sourceId);
+      if (bill) {
+        openBillModal(bill);
+      }
       return;
     }
 
-    openFixedEntryModal(entry.section, entry);
+    openFixedEntryModal(normalizeFixedSection(entry.section), {
+      ...entry,
+      section: normalizeFixedSection(entry.section),
+    });
   }
 
   function beginMonthlyGridDrag(rowId: string, monthValue: string) {
@@ -4824,7 +5368,7 @@ export function FinanceApp() {
     }
 
     if (row.sourceType === "card_auto_bill") {
-      openCardDetails(row.sourceId, getMonthValueOffset(monthValue, -1));
+      openCardDetails(row.sourceId, monthValue);
       return;
     }
 
@@ -4838,6 +5382,38 @@ export function FinanceApp() {
 
   function closeMonthlyGridCardModal() {
     setSelectedMonthlyGridCard(null);
+  }
+
+  function handleToggleMonthlyGridCardStatus(row: MonthlyGridRow, monthValue: string) {
+    const entry = fixedEntries.find((item) => item.id === row.sourceId);
+    if (entry) {
+      handleToggleFixedEntry(entry.id, monthValue);
+      return;
+    }
+
+    const bill = bills.find((item) => item.id === row.sourceId);
+    if (!bill) {
+      return;
+    }
+
+    const nextStatus: Bill["status"] = bill.status === "paid" ? "pending" : "paid";
+    setBills((current) =>
+      current.map((item) => (item.id === bill.id ? { ...item, status: nextStatus } : item)),
+    );
+    setTransactions((current) => {
+      if (nextStatus === "paid") {
+        const hasLinkedTransaction = current.some((transaction) => transaction.sourceBillId === bill.id);
+        return hasLinkedTransaction
+          ? current.map((transaction) =>
+              transaction.sourceBillId === bill.id ? { ...transaction, status: "paid" } : transaction,
+            )
+          : [...buildSettlementTransactionsFromBill({ ...bill, status: "paid" }), ...current].sort((left, right) =>
+              right.date.localeCompare(left.date),
+            );
+      }
+
+      return current.filter((transaction) => transaction.sourceBillId !== bill.id);
+    });
   }
 
   function handleDebtAdvance(debtId: string) {
@@ -4978,10 +5554,10 @@ export function FinanceApp() {
                   {remoteSaveStatus === "error" ? (
                     <button
                       type="button"
-                      onClick={() => saveStateToSupabase(buildPersistedState())}
+                      onClick={() => window.location.reload()}
                       className="rounded-full bg-white/70 px-3 py-1 text-xs font-semibold transition hover:bg-white"
                     >
-                      Tentar
+                      Recarregar
                     </button>
                   ) : null}
                 </div>
@@ -5179,7 +5755,7 @@ export function FinanceApp() {
     const workspaceMode: "fixed" | "month" = activeView === "home" ? "fixed" : "month";
     const fixedSections = fixedSectionOrder.map((section) => ({
       section,
-      rows: monthlyGridRows.filter((row) => row.section === section),
+      rows: monthlyGridRows.filter((row) => normalizeFixedSection(row.section) === section),
     }));
     const fixedMonthlyComparison = salaryCalendarMonths.map((monthItem) => {
       const income = monthlyGridRows
@@ -5193,7 +5769,7 @@ export function FinanceApp() {
             return false;
           }
 
-          return fixedEntries.find((item) => item.id === entry.sourceId)?.kind === "income";
+          return (fixedEntries.find((item) => item.id === entry.sourceId)?.kind ?? "expense") === "income";
         })
         .reduce((sum, entry) => sum + (entry.amountByMonth[monthItem.monthValue] ?? 0), 0);
       const expenses = monthlyGridRows
@@ -5206,7 +5782,7 @@ export function FinanceApp() {
             return true;
           }
 
-          return fixedEntries.find((item) => item.id === entry.sourceId)?.kind === "expense";
+          return (fixedEntries.find((item) => item.id === entry.sourceId)?.kind ?? "expense") === "expense";
         })
         .reduce((sum, entry) => sum + (entry.amountByMonth[monthItem.monthValue] ?? 0), 0);
 
@@ -5284,7 +5860,7 @@ export function FinanceApp() {
                           <th
                             key={monthItem.monthValue}
                             className={`min-w-[58px] border border-white/10 px-2 py-2 text-center text-[10px] uppercase tracking-[0.16em] text-white ${
-                              monthItem.monthValue === selectedMonth ? "bg-sky-700" : "bg-white/8"
+                              monthItem.monthValue === selectedMonth ? "bg-sky-200 text-sky-950" : "bg-white/8"
                             }`}
                           >
                             {monthItem.label}
@@ -5301,7 +5877,7 @@ export function FinanceApp() {
                           <td
                             key={`income-${monthItem.monthValue}`}
                             className={`border border-white/10 px-2 py-2.5 text-center font-semibold text-emerald-100 ${
-                              monthItem.monthValue === selectedMonth ? "bg-emerald-500/20" : "bg-transparent"
+                              monthItem.monthValue === selectedMonth ? "bg-sky-100/30 ring-1 ring-sky-200/60" : "bg-transparent"
                             }`}
                           >
                             {monthItem.income > 0 ? formatCurrency(monthItem.income) : "-"}
@@ -5316,7 +5892,7 @@ export function FinanceApp() {
                           <td
                             key={`expenses-${monthItem.monthValue}`}
                             className={`border border-white/10 px-2 py-2.5 text-center font-semibold text-rose-100 ${
-                              monthItem.monthValue === selectedMonth ? "bg-rose-500/20" : "bg-transparent"
+                              monthItem.monthValue === selectedMonth ? "bg-sky-100/30 ring-1 ring-sky-200/60" : "bg-transparent"
                             }`}
                           >
                             {monthItem.expenses > 0 ? formatCurrency(monthItem.expenses) : "-"}
@@ -5332,7 +5908,7 @@ export function FinanceApp() {
                             key={`balance-${monthItem.monthValue}`}
                             className={`border border-white/10 px-2 py-2.5 text-center font-semibold ${
                               monthItem.balance >= 0 ? "text-emerald-100" : "text-rose-100"
-                            } ${monthItem.monthValue === selectedMonth ? "bg-white/10" : "bg-transparent"}`}
+                            } ${monthItem.monthValue === selectedMonth ? "bg-sky-100/30 ring-1 ring-sky-200/60" : "bg-transparent"}`}
                           >
                             {formatCurrency(monthItem.balance)}
                           </td>
@@ -5380,7 +5956,7 @@ export function FinanceApp() {
                           <button
                             type="button"
                             onClick={() =>
-                              section === "Compras planejadas" ? openPurchaseModal() : openFixedEntryModal(section)
+                              section === "Planejamento" ? openPurchaseModal() : openFixedEntryModal(section)
                             }
                             className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
                           >
@@ -5419,7 +5995,7 @@ export function FinanceApp() {
                                   <th
                                     key={monthItem.monthValue}
                                     className={`min-w-[48px] border border-slate-200 bg-slate-900 px-1 py-2.5 text-center text-[10px] uppercase tracking-[0.16em] text-white ${
-                                      monthItem.monthValue === selectedMonth ? "bg-sky-700" : ""
+                                      monthItem.monthValue === selectedMonth ? "bg-sky-200 text-sky-950 ring-2 ring-sky-300" : ""
                                     }`}
                                   >
                                     {monthItem.label}
@@ -5455,8 +6031,7 @@ export function FinanceApp() {
                                         >
                                           Editar
                                         </button>
-                                        {row.sourceType === "card_auto_bill" &&
-                                        (fixedEntriesByCardId[row.sourceId] ?? []).length ? (
+                                        {row.sourceType === "card_auto_bill" ? (
                                           <button
                                             type="button"
                                             onClick={() =>
@@ -5478,27 +6053,20 @@ export function FinanceApp() {
                                     const isCompleted = row.completedMonths.includes(monthItem.monthValue);
                                     const isPurchaseRow = row.sourceType === "planned_purchase";
                                     const isCardAutoBillRow = row.sourceType === "card_auto_bill";
-                                    const cardFixedItems =
-                                      isCardAutoBillRow
-                                        ? fixedEntries.filter(
-                                            (entry) =>
-                                              entry.paymentMethod === "credit_card" &&
-                                              entry.cardId === row.sourceId &&
-                                              Boolean(entry.linkedBillGroupId) &&
-                                              (entry.amountByMonth[monthItem.monthValue] ?? 0) > 0,
-                                          )
-                                        : [];
-                                    const visibleCardFixedItems = cardFixedItems.slice(-5);
-                                    const hiddenCardFixedItemCount = Math.max(
+                                    const cardStatementItems = isCardAutoBillRow
+                                      ? getCardStatementGridItems(row.sourceId, monthItem.monthValue)
+                                      : [];
+                                    const visibleCardStatementItems = cardStatementItems.slice(-5);
+                                    const hiddenCardStatementItemCount = Math.max(
                                       0,
-                                      cardFixedItems.length - visibleCardFixedItems.length,
+                                      cardStatementItems.length - visibleCardStatementItems.length,
                                     );
 
                                     return (
                                       <td
                                         key={monthItem.monthValue}
                                         className={`border border-slate-200 bg-white p-1 ${
-                                          monthItem.monthValue === selectedMonth ? "bg-sky-50" : ""
+                                          monthItem.monthValue === selectedMonth ? "bg-sky-100/80 ring-1 ring-sky-200" : ""
                                         }`}
                                         onDragOver={(event) => {
                                           if (draggedGridCell?.rowId === row.id && !isCardAutoBillRow) {
@@ -5569,7 +6137,7 @@ export function FinanceApp() {
                                             <button
                                               type="button"
                                               onClick={() =>
-                                                openCardDetails(row.sourceId, getMonthValueOffset(monthItem.monthValue, -1))
+                                                openCardDetails(row.sourceId, monthItem.monthValue)
                                               }
                                               className="text-left"
                                             >
@@ -5577,32 +6145,43 @@ export function FinanceApp() {
                                                 {amount > 0 ? formatCurrency(amount) : "-"}
                                               </span>
                                               <span className="mt-2 block text-[9px] font-semibold uppercase tracking-[0.12em]">
-                                                {amount <= 0 ? "Sem fatura" : isCompleted ? "Quitada" : "Abrir"}
+                                                {amount <= 0 ? "Sem fatura" : "Abrir"}
                                               </span>
                                             </button>
-                                            {expandedCardBillRows[row.sourceId] && cardFixedItems.length ? (
+                                            {expandedCardBillRows[row.sourceId] ? (
                                               <div className="mt-2 space-y-1 border-t border-sky-200/70 pt-2">
-                                                {visibleCardFixedItems.map((entry) => (
-                                                  <div key={entry.id} className="flex justify-between gap-2 text-[10px]">
-                                                    <span className="truncate">{entry.title}</span>
-                                                    <span className="font-semibold">
-                                                      {formatCurrency(entry.amountByMonth[monthItem.monthValue] ?? 0)}
-                                                    </span>
-                                                  </div>
-                                                ))}
-                                                {hiddenCardFixedItemCount > 0 ? (
+                                                {visibleCardStatementItems.length ? (
+                                                  visibleCardStatementItems.map((item) => (
+                                                    <div key={item.id} className="flex justify-between gap-2 text-[10px]">
+                                                      <span className="min-w-0">
+                                                        <span className="block truncate">{item.title}</span>
+                                                        <span className="block truncate text-[9px] text-slate-400">
+                                                          {item.support}
+                                                        </span>
+                                                      </span>
+                                                      <span className="font-semibold">
+                                                        {formatCurrency(item.amount)}
+                                                      </span>
+                                                    </div>
+                                                  ))
+                                                ) : (
+                                                  <p className="text-[10px] font-semibold text-slate-400">
+                                                    Nenhum item recorrente vinculado a esta fatura.
+                                                  </p>
+                                                )}
+                                                {hiddenCardStatementItemCount > 0 ? (
                                                   <button
                                                     type="button"
                                                     onClick={(event) => {
                                                       event.stopPropagation();
                                                       openCardDetails(
                                                         row.sourceId,
-                                                        getMonthValueOffset(monthItem.monthValue, -1),
+                                                        monthItem.monthValue,
                                                       );
                                                     }}
                                                     className="mt-1 w-full rounded-full bg-white/80 px-2 py-1 text-left text-[10px] font-semibold text-sky-700 transition hover:bg-white"
                                                   >
-                                                    Ver mais {hiddenCardFixedItemCount}
+                                                    Ver mais {hiddenCardStatementItemCount}
                                                   </button>
                                                 ) : null}
                                               </div>
@@ -5635,35 +6214,15 @@ export function FinanceApp() {
                                               onClick={(event) => event.stopPropagation()}
                                               onFocus={(event) => event.stopPropagation()}
                                               onChange={(event) =>
-                                                handleFixedEntryAmountChange(
-                                                  row.sourceId,
-                                                  monthItem.monthValue,
-                                                  event.target.value,
-                                                )
+                                                handleMonthlyGridAmountChange(row, monthItem.monthValue, event.target.value)
                                               }
                                               inputMode="decimal"
                                               placeholder="0"
                                               className="w-full bg-transparent text-[11px] font-semibold leading-tight outline-none placeholder:text-current/40"
                                             />
-                                            <button
-                                              type="button"
-                                              disabled={amount <= 0}
-                                              onClick={(event) => {
-                                                event.stopPropagation();
-                                                handleToggleFixedEntry(row.sourceId, monthItem.monthValue);
-                                              }}
-                                              className="mt-2 rounded-full bg-white/70 px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-left transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
-                                            >
-                                              {amount <= 0
-                                                ? "Sem valor"
-                                                : isCompleted
-                                                  ? row.section === "Ganhos"
-                                                    ? "Entrou"
-                                                    : "Pago"
-                                                  : row.section === "Ganhos"
-                                                    ? "Marcar"
-                                                    : "Pagar"}
-                                            </button>
+                                            <span className="mt-2 rounded-full bg-white/70 px-2 py-1 text-left text-[9px] font-semibold uppercase tracking-[0.12em]">
+                                              {amount <= 0 ? "Sem valor" : "Abrir"}
+                                            </span>
                                           </div>
                                         )}
                                       </td>
@@ -5686,7 +6245,7 @@ export function FinanceApp() {
                                   <td
                                     key={`${section}-total-${salaryCalendarMonths[index].monthValue}`}
                                     className={`border border-slate-200 bg-slate-900 px-1 py-2.5 text-center text-[10px] font-semibold text-white ${
-                                      salaryCalendarMonths[index].monthValue === selectedMonth ? "bg-sky-700" : ""
+                                      salaryCalendarMonths[index].monthValue === selectedMonth ? "bg-sky-200 text-sky-950" : ""
                                     }`}
                                   >
                                     {amount > 0 ? formatCurrency(amount) : "-"}
@@ -5724,7 +6283,6 @@ export function FinanceApp() {
                 <div className="space-y-3">
                   {fixedMonthEntries.map((entry) => {
                     const amount = entry.amountByMonth[selectedMonth] ?? 0;
-                    const isCompleted = entry.completedMonths.includes(selectedMonth);
                     const isPurchaseRow = entry.sourceType === "planned_purchase";
                     const isCardAutoBillRow = entry.sourceType === "card_auto_bill";
                     const sourceFixedEntry = fixedEntries.find((item) => item.id === entry.sourceId);
@@ -5769,7 +6327,7 @@ export function FinanceApp() {
                               </div>
                               <button
                                 type="button"
-                                onClick={() => openCardDetails(entry.sourceId, getMonthValueOffset(selectedMonth, -1))}
+                                onClick={() => openCardDetails(entry.sourceId, selectedMonth)}
                                 className="rounded-2xl bg-sky-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-sky-700"
                               >
                                 Abrir cartao
@@ -5777,11 +6335,11 @@ export function FinanceApp() {
                             </>
                           ) : (
                             <>
-                              <FormField label={entryKind === "income" ? "Valor que entrou" : "Valor pago"}>
+                              <FormField label={entryKind === "income" ? "Valor previsto" : "Valor previsto"}>
                                 <input
                                   value={String(amount || "")}
                                   onChange={(event) =>
-                                    handleFixedEntryAmountChange(entry.sourceId, selectedMonth, event.target.value)
+                                    handleMonthlyGridAmountChange(entry, selectedMonth, event.target.value)
                                   }
                                   inputMode="decimal"
                                   className="field"
@@ -5789,22 +6347,10 @@ export function FinanceApp() {
                               </FormField>
                               <button
                                 type="button"
-                                onClick={() => handleToggleFixedEntry(entry.sourceId, selectedMonth)}
-                                className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${
-                                  isCompleted
-                                    ? "bg-slate-900 text-white hover:bg-slate-700"
-                                    : entryKind === "income"
-                                      ? "bg-emerald-500 text-white hover:bg-emerald-600"
-                                      : "bg-rose-500 text-white hover:bg-rose-600"
-                                }`}
+                                onClick={() => openMonthlyGridCardModal(entry, selectedMonth)}
+                                className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                               >
-                                {isCompleted
-                                  ? entryKind === "income"
-                                    ? "Desmarcar entrada"
-                                    : "Desmarcar pagamento"
-                                  : entryKind === "income"
-                                    ? "Marcar que entrou"
-                                    : "Marcar como pago"}
+                                Abrir detalhe
                               </button>
                             </>
                           )}
@@ -5977,7 +6523,11 @@ export function FinanceApp() {
                         setDraftTransaction((current) => ({
                           ...current,
                           type: event.target.value as "income" | "expense",
-                          categoryId: event.target.value === "income" ? "cat-salary" : "cat-market",
+                          operationKind: event.target.value === "income" ? "income" : "variable",
+                          categoryId: getOperationDefaultCategoryId(
+                            event.target.value === "income" ? "income" : "variable",
+                            event.target.value as "income" | "expense",
+                          ),
                           paymentOption:
                             event.target.value === "income" ? "bank_transfer" : current.paymentOption,
                           linkedPlannedPurchaseId:
@@ -5991,6 +6541,32 @@ export function FinanceApp() {
                     </select>
                   </FormField>
                 </div>
+
+                {draftTransaction.type === "expense" ? (
+                  <FormField label="Tipo de lancamento">
+                    <select
+                      value={draftTransaction.operationKind}
+                      onChange={(event) => {
+                        const operationKind = event.target.value as DraftTransaction["operationKind"];
+                        setDraftTransaction((current) => ({
+                          ...current,
+                          operationKind,
+                          categoryId: getOperationDefaultCategoryId(operationKind, current.type),
+                          linkedPlannedPurchaseId:
+                            operationKind === "planned_purchase" ? current.linkedPlannedPurchaseId : "",
+                        }));
+                      }}
+                      className="field"
+                    >
+                      <option value="variable">Gasto comum</option>
+                      <option value="basic_bill">Conta normal</option>
+                      <option value="recurring_bill">Conta recorrente</option>
+                      <option value="debt_payment">Divida / abatimento</option>
+                      <option value="investment">Investimento</option>
+                      <option value="planned_purchase">Compra planejada vinculada</option>
+                    </select>
+                  </FormField>
+                ) : null}
 
                 <div className="grid gap-3 sm:grid-cols-2">
                   <FormField label="Valor">
@@ -6028,17 +6604,11 @@ export function FinanceApp() {
                       }
                       className="field"
                     >
-                      {categories
-                        .filter((category) =>
-                          draftTransaction.type === "income"
-                            ? category.type === "income"
-                            : category.type === "expense" && !isHiddenUiCategoryId(category.id),
-                        )
-                        .map((category) => (
-                          <option key={category.id} value={category.id}>
-                            {category.name}
-                          </option>
-                        ))}
+                      {renderCategoryOptions(draftTransaction.type, {
+                        includeHidden:
+                          draftTransaction.operationKind === "investment" ||
+                          draftTransaction.operationKind === "debt_payment",
+                      })}
                     </select>
                   </FormField>
                   <FormField label="Forma de pagamento">
@@ -6682,11 +7252,15 @@ export function FinanceApp() {
           cards,
         ).label
       : undefined;
+    const bill = bills.find((item) => item.id === row.sourceId);
+    const linkedDebtId = row.linkedDebtId;
     const originLabel =
       row.sourceType === "planned_purchase"
         ? "Compra planejada"
-        : row.linkedDebtId
+        : linkedDebtId
           ? "Planejamento de divida"
+        : bill
+          ? "Conta a pagar"
         : row.linkedBillGroupId
           ? "Valor fixo sincronizado com Contas"
           : "Valor fixo recorrente";
@@ -6718,7 +7292,7 @@ export function FinanceApp() {
 
           <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <InfoBlock label="Secao" value={row.section} />
+              <InfoBlock label="Secao" value={fixedSectionDisplayLabels[normalizeFixedSection(row.section)]} />
               <InfoBlock label="Valor do mes" value={amount > 0 ? formatCurrency(amount) : "Sem valor"} />
               <InfoBlock
                 label="Status"
@@ -6796,7 +7370,7 @@ export function FinanceApp() {
               <button
                 type="button"
                 disabled={amount <= 0}
-                onClick={() => handleToggleFixedEntry(row.sourceId, monthValue)}
+                onClick={() => handleToggleMonthlyGridCardStatus(row, monthValue)}
                 className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${
                   amount <= 0
                     ? "cursor-not-allowed bg-slate-100 text-slate-400"
@@ -6816,6 +7390,18 @@ export function FinanceApp() {
                     : entryKind === "income"
                       ? "Marcar que entrou"
                       : "Marcar como pago"}
+              </button>
+            ) : null}
+            {linkedDebtId ? (
+              <button
+                type="button"
+                onClick={() => {
+                  handleDeleteDebt(linkedDebtId);
+                  closeMonthlyGridCardModal();
+                }}
+                className="rounded-2xl border border-red-200 px-4 py-3 text-sm font-semibold text-red-600 transition hover:bg-red-50"
+              >
+                Excluir divida
               </button>
             ) : null}
             <button
@@ -6840,12 +7426,14 @@ export function FinanceApp() {
     }
 
     const fixedEntryKind = getFixedEntryKind(draftFixedEntry.section);
-    const fixedCategoryOptions = categories.filter((category) => category.type === fixedEntryKind);
+    const fixedCategoryOptions = getSelectableCategories(fixedEntryKind, {
+      includeHidden: normalizeFixedSection(draftFixedEntry.section) === "Contas",
+    });
     const usesCard =
       draftFixedEntry.paymentMethod === "credit_card" || draftFixedEntry.paymentMethod === "debit_card";
     const selectedFixedCard = cards.find((card) => card.id === draftFixedEntry.cardId) ?? cards[0];
     const canSyncCardLimit =
-      draftFixedEntry.section === "Gastos fixos" &&
+      normalizeFixedSection(draftFixedEntry.section) === "Contas" &&
       draftFixedEntry.paymentMethod === "credit_card" &&
       selectedFixedCard?.availableMode !== "debit";
 
@@ -6886,7 +7474,7 @@ export function FinanceApp() {
                   }
                   className="field"
                 >
-                  {fixedSectionOrder.filter((section) => section !== "Compras planejadas").map((section) => (
+                  {fixedSectionOrder.filter((section) => section !== "Planejamento").map((section) => (
                     <option key={section} value={section}>
                       {fixedSectionDisplayLabels[section]}
                     </option>
@@ -6913,7 +7501,7 @@ export function FinanceApp() {
                 >
                   {fixedCategoryOptions.map((category) => (
                     <option key={category.id} value={category.id}>
-                      {category.name}
+                      {getCategoryOptionLabel(category)}
                     </option>
                   ))}
                 </select>
@@ -7430,6 +8018,7 @@ export function FinanceApp() {
                     setDraftCategory((current) => ({
                       ...current,
                       type: event.target.value as "income" | "expense",
+                      parentId: "",
                     }))
                   }
                   className="field"
@@ -7449,6 +8038,37 @@ export function FinanceApp() {
                 />
               </FormField>
             </div>
+
+            <FormField label="Categoria principal">
+              <select
+                value={draftCategory.parentId}
+                onChange={(event) =>
+                  setDraftCategory((current) => ({
+                    ...current,
+                    parentId: event.target.value,
+                    color:
+                      categories.find((category) => category.id === event.target.value)?.color ??
+                      current.color,
+                  }))
+                }
+                className="field"
+              >
+                <option value="">Nenhuma, e uma categoria principal</option>
+                {categories
+                  .filter(
+                    (category) =>
+                      category.type === draftCategory.type &&
+                      !category.parentId &&
+                      category.id !== editingCategoryId &&
+                      !isHiddenUiCategoryId(category.id),
+                  )
+                  .map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+              </select>
+            </FormField>
 
             <div className="flex flex-wrap justify-between gap-3">
               <div>
@@ -7731,7 +8351,7 @@ export function FinanceApp() {
               {selectableBillCategories.length > 0 ? (
                 selectableBillCategories.map((category) => (
                   <option key={category.id} value={category.id}>
-                    {category.name}
+                    {getCategoryOptionLabel(category)}
                   </option>
                 ))
               ) : (
@@ -8143,9 +8763,22 @@ export function FinanceApp() {
                 </select>
               </FormField>
             ) : null}
-            <div className="flex justify-end gap-3">
-              <button type="button" onClick={closeDebtModal} className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Cancelar</button>
-              <button type="submit" className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700">Salvar divida</button>
+            <div className="flex flex-wrap justify-between gap-3">
+              <div>
+                {editingDebtId ? (
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteDebt(editingDebtId)}
+                    className="rounded-2xl border border-red-200 px-4 py-3 text-sm font-semibold text-red-600 transition hover:bg-red-50"
+                  >
+                    Excluir divida
+                  </button>
+                ) : null}
+              </div>
+              <div className="flex gap-3">
+                <button type="button" onClick={closeDebtModal} className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Cancelar</button>
+                <button type="submit" className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700">Salvar divida</button>
+              </div>
             </div>
           </form>
         </div>
@@ -8260,7 +8893,7 @@ export function FinanceApp() {
                   <div>
                     <p className="text-sm font-semibold text-slate-900">Previa do planejamento</p>
                     <p className="mt-1 text-sm text-slate-500">
-                      Ao confirmar, essa distribuicao vai direto para `Dividas e repasses` na planilha.
+                      Ao confirmar, essa distribuicao vai direto para Contas na planilha.
                     </p>
                   </div>
                   <div className="rounded-full bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
@@ -8693,104 +9326,106 @@ export function FinanceApp() {
         ) : null}
 
         {planningScreen === "reserves" ? (
-          <div className="grid gap-4 xl:grid-cols-[1.12fr_0.88fr]">
-            <Panel title="Reservas por objetivo" description="">
+          <div className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-3">
+              <MetricStack
+                label="Objetivos"
+                value={String(reservePurchases.length)}
+                support="Reservas ativas"
+              />
+              <MetricStack
+                label="Ja reservado"
+                value={formatCurrency(totalReserveSaved)}
+                support={`de ${formatCurrency(totalReserveTarget)}`}
+              />
+              <MetricStack
+                label="Falta guardar"
+                value={formatCurrency(totalReserveRemaining)}
+                support="Para concluir os objetivos"
+              />
+            </div>
+
+            <Panel
+              title="Reservas"
+              description=""
+              action={
+                <button
+                  type="button"
+                  onClick={() => openPurchaseModal()}
+                  className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
+                >
+                  Nova reserva
+                </button>
+              }
+            >
               <div className="space-y-3">
-                {activePlannedPurchases.length ? (
-                  activePlannedPurchases.map((purchase) => {
+                {reservePurchases.length ? (
+                  reservePurchases.map((purchase) => {
                     const reservePlan = getReserveMonthlyPlan(purchase);
+                    const progress = purchase.estimatedValue
+                      ? purchase.savedAmount / purchase.estimatedValue
+                      : 0;
+
                     return (
                       <div
                         key={purchase.id}
-                        className="rounded-[24px] border border-slate-200 bg-white px-4 py-4"
+                        className="rounded-[24px] border border-slate-200 bg-white px-4 py-4 shadow-[0_18px_42px_rgba(15,23,42,0.04)]"
                       >
-                        <div className="grid gap-3 xl:grid-cols-[1.35fr_0.65fr]">
+                        <div className="grid gap-4 xl:grid-cols-[1.25fr_1fr_auto] xl:items-center">
                           <div>
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <p className="text-sm font-semibold text-slate-900">{purchase.name}</p>
-                                <p className="mt-1 text-sm text-slate-500">
-                                  {purchase.description || "Objetivo em acompanhamento"}
-                                </p>
-                              </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-sm font-semibold text-slate-900">{purchase.name}</p>
                               <PriorityPill priority={purchase.priority} />
                             </div>
-                            <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                              <InfoBlock label="Alvo" value={formatCurrency(purchase.estimatedValue)} />
-                              <InfoBlock label="Reservado" value={formatCurrency(purchase.savedAmount)} />
-                              <InfoBlock label="Falta" value={formatCurrency(reservePlan.remaining)} />
-                              <InfoBlock
-                                label="Parcela mensal"
-                                value={formatCurrency(reservePlan.suggestedMonthlyAmount)}
-                              />
-                            </div>
-                          </div>
-                          <div className="rounded-2xl bg-slate-50 px-4 py-4">
-                            <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Prazo</p>
-                            <p className="mt-2 text-sm font-semibold text-slate-900">
-                              {purchase.desiredDate ? formatShortDate(purchase.desiredDate) : "Sem data"}
+                            <p className="mt-1 text-sm text-slate-500">
+                              {purchase.description || "Reserva planejada para compra futura"}
                             </p>
-                            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.16em] text-sky-600">
+                              Prazo {purchase.desiredDate ? formatShortDate(purchase.desiredDate) : "sem data"} ·{" "}
                               {reservePlan.monthCount} meses ate {formatMonthLabel(monthValueToDate(reservePlan.targetMonth))}
                             </p>
-                            <div className="mt-4">
-                              <ProgressBar
-                                value={
-                                  purchase.estimatedValue
-                                    ? purchase.savedAmount / purchase.estimatedValue
-                                    : 0
-                                }
-                              />
-                            </div>
                           </div>
+
+                          <div className="grid gap-3 sm:grid-cols-4">
+                            <InfoBlock label="Alvo" value={formatCurrency(purchase.estimatedValue)} />
+                            <InfoBlock label="Reservado" value={formatCurrency(purchase.savedAmount)} />
+                            <InfoBlock label="Falta" value={formatCurrency(reservePlan.remaining)} />
+                            <InfoBlock
+                              label="Sugestao"
+                              value={formatCurrency(reservePlan.suggestedMonthlyAmount)}
+                            />
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 xl:justify-end">
+                            <button
+                              type="button"
+                              onClick={() => openPurchaseModal(purchase)}
+                              className="rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setHomeTab("grid")}
+                              className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
+                            >
+                              Ver planilha
+                            </button>
+                          </div>
+                        </div>
+                        <div className="mt-4">
+                          <div className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                            <span>Progresso da reserva</span>
+                            <span>{Math.round(progress * 100)}%</span>
+                          </div>
+                          <ProgressBar value={progress} />
                         </div>
                       </div>
                     );
                   })
                 ) : (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                    Ainda nao existem objetivos de reserva ativos.
-                  </div>
-                )}
-              </div>
-            </Panel>
-
-            <Panel
-              title="Metas do mes"
-              description=""
-              action={
-                <button
-                  type="button"
-                  onClick={() => openPurchaseModal()}
-                  className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Novo objetivo
-                </button>
-              }
-            >
-              <div className="space-y-3">
-                {currentMonthlyPlan.reserveGoals.length ? (
-                  currentMonthlyPlan.reserveGoals.map((goal) => (
-                    <div key={goal.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">{goal.name}</p>
-                          <p className="mt-1 text-xs text-slate-500">
-                            Prazo {formatShortDate(goal.deadline)}
-                          </p>
-                        </div>
-                        <PriorityPill priority={goal.priority} />
-                      </div>
-                      <div className="mt-3 flex items-center justify-between text-sm">
-                        <span className="text-slate-500">{formatCurrency(goal.current)}</span>
-                        <span className="font-semibold text-slate-900">{formatCurrency(goal.target)}</span>
-                      </div>
-                      <ProgressBar value={goal.target ? goal.current / goal.target : 0} />
-                    </div>
-                  ))
-                ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                    Nenhuma meta mensal cadastrada por enquanto.
+                    Ainda nao existem reservas ativas. Crie uma compra no modo guardar dinheiro para acompanhar aqui.
                   </div>
                 )}
               </div>
@@ -9000,14 +9635,12 @@ export function FinanceApp() {
               <MetricStack
                 dark
                 label="Fatura do mes"
-                value={formatCurrency(selectedCardStatementSummary?.creditUsed ?? selectedCardStatementTotal)}
+                value={formatCurrency(selectedCardStatementTotal)}
               />
               <MetricStack
                 dark
                 label="Disponivel"
-                value={formatCurrency(
-                  Math.max(0, selectedCardDetail.creditLimit - selectedCardStatementTotal),
-                )}
+                value={formatCurrency(selectedCardAvailableLimit)}
               />
               <MetricStack
                 dark
@@ -9026,7 +9659,11 @@ export function FinanceApp() {
                     (transaction) =>
                       transaction.cardId === selectedCardDetail.id &&
                       transaction.cardMode === "credit" &&
-                      transaction.date.slice(0, 7) === monthValue,
+                      getSuggestedCardStatementMonth(
+                        selectedCardDetail,
+                        transaction.date,
+                        transaction.date.slice(0, 7),
+                      ) === monthValue,
                   )
                   .reduce((sum, transaction) => sum + transaction.amount, 0);
 
@@ -9185,10 +9822,8 @@ export function FinanceApp() {
                   />
                   <SimulationRow
                     label="Limite restante"
-                    value={formatCurrency(
-                      Math.max(0, selectedCardDetail.creditLimit - selectedCardStatementTotal),
-                    )}
-                    support="Considerando apenas a fatura do mes selecionado"
+                    value={formatCurrency(selectedCardAvailableLimit)}
+                    support="Considerando faturas abertas deste mes em diante"
                   />
                 </div>
               </Panel>
@@ -9436,9 +10071,15 @@ export function FinanceApp() {
     const activeDebtsAmount = debts
       .filter((debt) => debt.status === "active")
       .reduce((sum, debt) => sum + debt.remainingAmount, 0);
-    const recurringBillsCount = bills.filter((bill) => bill.isRecurring).length;
+    const normalBillItems = billsForDisplay.filter((item) => item.source === "manual" && !item.bill.isRecurring);
+    const recurringBillItems = billsForDisplay.filter((item) => item.source === "manual" && item.bill.isRecurring);
+    const normalBillsAmount = normalBillItems
+      .filter((item) => item.bill.status !== "paid")
+      .reduce((sum, item) => sum + item.bill.amount, 0);
+    const recurringBillsCount = recurringBillItems.length;
     const accountsMenu = [
       { id: "overview" as const, label: "Visao geral" },
+      { id: "normal" as const, label: "Contas" },
       { id: "recurring" as const, label: "Contas recorrentes" },
       { id: "debts" as const, label: "Dividas" },
     ];
@@ -9488,10 +10129,14 @@ export function FinanceApp() {
           description=""
           action={accountsQuickActions}
         >
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
               <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Pendencias do mes</p>
               <p className="mt-2 text-2xl font-semibold text-slate-900">{formatCurrency(pendingBillsAmount)}</p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+              <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Contas normais</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">{formatCurrency(normalBillsAmount)}</p>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
               <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Dividas em aberto</p>
@@ -9506,10 +10151,10 @@ export function FinanceApp() {
         </Panel>
 
         {accountsSection === "overview" ? (
-          <div className="grid gap-4 xl:grid-cols-[1.02fr_0.98fr]">
-            <Panel title="Contas recorrentes e vencimentos" description="">
+          <div className="grid gap-4 xl:grid-cols-3">
+            <Panel title="Contas" description="">
               <div className="space-y-3">
-                {billsForDisplay.slice(0, 4).map((item) => (
+                {normalBillItems.slice(0, 4).map((item) => (
                   <div key={item.bill.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>
@@ -9522,47 +10167,165 @@ export function FinanceApp() {
                     </div>
                   </div>
                 ))}
+                {!normalBillItems.length ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                    Nenhuma conta normal cadastrada.
+                  </div>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                onClick={() => setAccountsSection("normal")}
+                className="mt-4 rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Ver contas
+              </button>
+            </Panel>
+
+            <Panel title="Contas recorrentes" description="">
+              <div className="space-y-3">
+                {recurringBillItems.slice(0, 4).map((item) => (
+                  <div key={item.bill.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{item.bill.title}</p>
+                        <p className="mt-1 text-sm text-slate-500">
+                          Todo dia {String(item.bill.recurringDay ?? Number(item.bill.dueDate.slice(8, 10))).padStart(2, "0")}
+                        </p>
+                      </div>
+                      <p className="text-sm font-semibold text-slate-900">{formatCurrency(item.bill.amount)}</p>
+                    </div>
+                  </div>
+                ))}
+                {!recurringBillItems.length ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                    Nenhuma conta recorrente cadastrada.
+                  </div>
+                ) : null}
               </div>
               <button
                 type="button"
                 onClick={() => setAccountsSection("recurring")}
                 className="mt-4 rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
               >
-                Ver todas as contas
+                Ver recorrentes
               </button>
             </Panel>
 
-            <div className="space-y-4">
-              <Panel title="Dividas e abatimentos" description="">
-                <div className="space-y-3">
-                  {debts.slice(0, 3).map((debt) => (
-                    <div key={debt.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
-                      <div className="flex items-center justify-between gap-3">
+            <Panel title="Dividas e abatimentos" description="">
+              <div className="space-y-3">
+                {debts.slice(0, 3).map((debt) => (
+                  <div key={debt.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{debt.name}</p>
+                        <p className="mt-1 text-sm text-slate-500">
+                          Proximo pagamento em {formatShortDate(debt.nextDueDate)}
+                        </p>
+                      </div>
+                      <p className="text-sm font-semibold text-slate-900">{formatCurrency(debt.remainingAmount)}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setAccountsSection("debts")}
+                className="mt-4 rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Ver dividas
+              </button>
+            </Panel>
+          </div>
+        ) : accountsSection === "normal" ? (
+          <Panel title="Contas" description="">
+            <div className="space-y-3">
+              {normalBillItems.length ? (
+                normalBillItems.map((item) => {
+                  const bill = item.bill;
+
+                  return (
+                    <div
+                      key={bill.id}
+                      className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-[0_18px_42px_rgba(15,23,42,0.04)]"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
-                          <p className="text-sm font-semibold text-slate-900">{debt.name}</p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold text-slate-900">{bill.title}</p>
+                            <PriorityPill priority={bill.priority} />
+                            {(bill.installments ?? 1) > 1 ? (
+                              <span className="rounded-full bg-violet-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-violet-700">
+                                {bill.installments} parcelas
+                              </span>
+                            ) : (
+                              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-600">
+                                A vista
+                              </span>
+                            )}
+                          </div>
                           <p className="mt-1 text-sm text-slate-500">
-                            Proximo pagamento em {formatShortDate(debt.nextDueDate)}
+                            {getBillCategoryDisplayName(bill)} - vence {formatShortDate(bill.dueDate)}
+                          </p>
+                          {bill.plannedPaymentMethod ? (
+                            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">
+                              Pagamento planejado: {getPlannedPaymentDetails(
+                                bill.plannedPaymentMethod,
+                                bill.plannedCardId,
+                                bill.plannedCardMode ?? "credit",
+                                cards,
+                              ).label}
+                            </p>
+                          ) : null}
+                          {bill.notes ? <p className="mt-2 text-sm text-slate-500">{bill.notes}</p> : null}
+                        </div>
+                        <div className="text-right">
+                          <p className="text-lg font-semibold text-slate-900">{formatCurrency(bill.amount)}</p>
+                          <p
+                            className={`mt-1 text-xs font-semibold uppercase tracking-[0.24em] ${
+                              bill.status === "paid"
+                                ? "text-emerald-600"
+                                : bill.status === "overdue"
+                                  ? "text-red-500"
+                                  : "text-orange-500"
+                            }`}
+                          >
+                            {bill.status}
                           </p>
                         </div>
-                        <p className="text-sm font-semibold text-slate-900">{formatCurrency(debt.remainingAmount)}</p>
+                      </div>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openBillModal(bill)}
+                          className="rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                        >
+                          Editar
+                        </button>
+                        {bill.status !== "paid" ? (
+                          <button
+                            type="button"
+                            onClick={() => handlePayBill(bill.id)}
+                            className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
+                          >
+                            Marcar como paga
+                          </button>
+                        ) : null}
                       </div>
                     </div>
-                  ))}
+                  );
+                })
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                  Nenhuma conta normal cadastrada. Use Nova conta para registrar pagamentos avulsos, a vista ou parcelados.
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setAccountsSection("debts")}
-                  className="mt-4 rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Ver dividas
-                </button>
-              </Panel>
+              )}
             </div>
-          </div>
+          </Panel>
         ) : accountsSection === "recurring" ? (
           <Panel title="Contas recorrentes e vencimentos" description="">
             <div className="space-y-3">
-              {billsForDisplay.map((item) => {
+              {recurringBillItems.map((item) => {
                 const bill = item.bill;
 
                 return (
@@ -9725,6 +10488,13 @@ export function FinanceApp() {
                       className="rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
                     >
                       Editar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteDebt(debt.id)}
+                      className="rounded-full border border-red-200 px-4 py-2 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+                    >
+                      Excluir
                     </button>
                     {debt.remainingAmount > 0 ? (
                       <button
@@ -10272,15 +11042,21 @@ export function FinanceApp() {
                 <div className="space-y-3">
                   {categories
                     .filter((category) => !isHiddenUiCategoryId(category.id))
+                    .sort((left, right) =>
+                      getCategoryFullName(left, categories).localeCompare(getCategoryFullName(right, categories)),
+                    )
                     .map((category) => (
                     <div key={category.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="flex items-center gap-3">
                           <span className="h-4 w-4 rounded-full" style={{ backgroundColor: category.color }} />
                           <div>
-                            <p className="text-sm font-semibold text-slate-900">{category.name}</p>
+                            <p className="text-sm font-semibold text-slate-900">
+                              {getCategoryFullName(category, categories)}
+                            </p>
                             <p className="mt-1 text-sm text-slate-500">
                               {category.type === "income" ? "Receita" : "Despesa"}
+                              {category.parentId ? " - Subcategoria" : " - Principal"}
                             </p>
                           </div>
                         </div>
@@ -10487,11 +11263,13 @@ export function FinanceApp() {
           expenseKind:
             draft.linkedPlannedPurchaseId
               ? "planned_purchase"
-              : draft.categoryId === "cat-invest"
+              : draft.operationKind === "investment" || draft.categoryId === "cat-invest"
               ? "investment"
-              : draft.categoryId === "cat-debt"
+              : draft.operationKind === "debt_payment" || draft.categoryId === "cat-debt"
                 ? "debt_payment"
-                : "planned_purchase",
+                : draft.operationKind === "basic_bill" || draft.operationKind === "recurring_bill"
+                  ? "basic_bill"
+                  : "variable",
           cardId: draft.cardId,
           cardMode: draft.cardMode,
           installmentGroupId,
@@ -10520,11 +11298,13 @@ export function FinanceApp() {
           draft.type === "expense"
             ? draft.linkedPlannedPurchaseId
               ? "planned_purchase"
-              : draft.categoryId === "cat-invest"
+              : draft.operationKind === "investment" || draft.categoryId === "cat-invest"
               ? "investment"
-              : draft.categoryId === "cat-debt"
+              : draft.operationKind === "debt_payment" || draft.categoryId === "cat-debt"
                 ? "debt_payment"
-                : "variable"
+                : draft.operationKind === "basic_bill" || draft.operationKind === "recurring_bill"
+                  ? "basic_bill"
+                  : "variable"
             : undefined,
         cardId:
           draft.type === "expense" &&

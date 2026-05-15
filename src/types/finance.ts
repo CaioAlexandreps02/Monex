@@ -74,6 +74,7 @@ export interface Category {
   name: string;
   type: TransactionType;
   color: string;
+  parentId?: string;
 }
 
 export interface Transaction {
@@ -194,6 +195,7 @@ export interface Investment {
   accountId?: string;
   cardId?: string;
   cardMode?: CardMode;
+  plannedAmountByMonth?: Record<string, number>;
   contributions: InvestmentContribution[];
 }
 
@@ -239,6 +241,8 @@ export interface MonthlyPlan {
 
 export type FixedFlowSection =
   | "Ganhos"
+  | "Contas"
+  | "Planejamento"
   | "Gastos fixos"
   | "Dividas e repasses"
   | "Compras planejadas";
