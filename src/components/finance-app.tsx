@@ -540,6 +540,22 @@ function getSuggestedCardStatementMonth(card: Card | undefined, baseDateValue?: 
   return `${statementDate.getFullYear()}-${String(statementDate.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function getCardStatementMonthForTransaction(card: Card | undefined, transaction: Transaction) {
+  if (transaction.sourceBillId) {
+    return transaction.date.slice(0, 7);
+  }
+
+  return getSuggestedCardStatementMonth(card, transaction.date, transaction.date.slice(0, 7));
+}
+
+function getCardStatementMonthForBill(_card: Card | undefined, bill: Bill) {
+  return bill.dueDate.slice(0, 7);
+}
+
+function getStatementWindowMonths(fromMonthValue: string, windowSize = 12) {
+  return Array.from({ length: windowSize }, (_, index) => getMonthValueOffset(fromMonthValue, index));
+}
+
 const initialDraftFixedEntry: DraftFixedEntry = {
   section: "Ganhos",
   title: "",
@@ -814,10 +830,14 @@ export function FinanceApp() {
     ),
   );
   const [draftTransaction, setDraftTransaction] = useState(initialDraftTransaction);
+  const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
+  const [editingTransactionScope, setEditingTransactionScope] = useState<"single" | "group">("single");
+  const [draftTransactionError, setDraftTransactionError] = useState<string | null>(null);
   const [draftCategory, setDraftCategory] = useState(initialDraftCategory);
   const [draftCard, setDraftCard] = useState(initialDraftCard);
   const [draftBankPreset, setDraftBankPreset] = useState(initialDraftBankPreset);
   const [draftBill, setDraftBill] = useState(initialDraftBill);
+  const [draftBillError, setDraftBillError] = useState<string | null>(null);
   const [draftDebt, setDraftDebt] = useState(initialDraftDebt);
   const [draftDebtPlan, setDraftDebtPlan] = useState(initialDraftDebtPlan);
   const [draftAccount, setDraftAccount] = useState(initialDraftAccount);
@@ -871,6 +891,10 @@ export function FinanceApp() {
     monthValue: string;
   } | null>(null);
   const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false);
+  const [transactionScopePrompt, setTransactionScopePrompt] = useState<{
+    action: "edit" | "delete";
+    transactionId: string;
+  } | null>(null);
   const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false);
   const [editingPurchaseId, setEditingPurchaseId] = useState<string | null>(null);
   const [draftPurchase, setDraftPurchase] = useState(initialDraftPurchase);
@@ -1286,7 +1310,7 @@ export function FinanceApp() {
       const groupedByMonth = transactions
         .filter((transaction) => transaction.cardId === card.id && transaction.cardMode === "credit")
         .reduce<Record<string, number>>((accumulator, transaction) => {
-          const monthValue = getSuggestedCardStatementMonth(card, transaction.date, transaction.date.slice(0, 7));
+          const monthValue = getCardStatementMonthForTransaction(card, transaction);
           accumulator[monthValue] = (accumulator[monthValue] ?? 0) + transaction.amount;
           return accumulator;
         }, {});
@@ -1412,13 +1436,74 @@ export function FinanceApp() {
   );
   const categoryBreakdown = getCategoryBreakdown(transactions, referenceMonthDate);
   const monthlyTrend = getMonthlyTrend(transactions);
-  const getOpenCardStatementTotal = (cardId: string, fromMonthValue = selectedMonth) =>
-    autoCardBills
-      .filter((item) => item.cardId === cardId && item.statementMonth >= fromMonthValue)
-      .reduce((sum, item) => sum + item.bill.amount, 0);
+  const getOpenCardStatementTotal = (
+    cardId: string,
+    fromMonthValue = selectedMonth,
+    sourceTransactions: Transaction[] = transactions,
+    windowSize = 12,
+  ) => {
+    const card = cards.find((item) => item.id === cardId);
+    const months = new Set(getStatementWindowMonths(fromMonthValue, windowSize));
+
+    return sourceTransactions
+      .filter(
+        (transaction) =>
+          transaction.cardId === cardId &&
+          transaction.cardMode === "credit" &&
+          months.has(getCardStatementMonthForTransaction(card, transaction)),
+      )
+      .reduce((sum, transaction) => sum + transaction.amount, 0);
+  };
+  const getCardAvailableLimit = (
+    cardId: string,
+    fromMonthValue = selectedMonth,
+    sourceTransactions: Transaction[] = transactions,
+  ) => {
+    const card = cards.find((item) => item.id === cardId);
+    if (!card || card.availableMode === "debit") {
+      return { committed: 0, available: 0, limit: 0 };
+    }
+
+    const committed = getOpenCardStatementTotal(cardId, fromMonthValue, sourceTransactions, 12);
+    return {
+      committed,
+      available: Number((card.creditLimit - committed).toFixed(2)),
+      limit: card.creditLimit,
+    };
+  };
+  const getCreditLimitErrorForTransactions = (
+    candidateTransactions: Transaction[],
+    baseTransactions: Transaction[] = transactions,
+    fromMonthValue = selectedMonth,
+  ) => {
+    const affectedCardIds = [
+      ...new Set(
+        candidateTransactions
+          .filter((transaction) => transaction.cardId && transaction.cardMode === "credit")
+          .map((transaction) => transaction.cardId as string),
+      ),
+    ];
+    const nextTransactions = [...candidateTransactions, ...baseTransactions];
+
+    for (const cardId of affectedCardIds) {
+      const card = cards.find((item) => item.id === cardId);
+      if (!card || card.availableMode === "debit") {
+        continue;
+      }
+
+      const { committed, limit } = getCardAvailableLimit(cardId, fromMonthValue, nextTransactions);
+      if (committed > limit + 0.009) {
+        return `O limite de ${card.name} seria ultrapassado. Proximas 12 faturas: ${formatCurrency(
+          committed,
+        )} de ${formatCurrency(limit)}.`;
+      }
+    }
+
+    return null;
+  };
   const cardSummaries = getCardSummaries(cards, transactions, referenceMonthDate).map((card) => ({
     ...card,
-    availableLimit: Math.max(0, card.creditLimit - getOpenCardStatementTotal(card.id, selectedMonth)),
+    availableLimit: Math.max(0, getCardAvailableLimit(card.id, selectedMonth).available),
   }));
   const upcomingInstallments = getUpcomingInstallments(
     transactions,
@@ -1635,7 +1720,7 @@ export function FinanceApp() {
                   transaction.cardId === selectedCardDetail.id && transaction.cardMode === "credit",
               )
               .map((transaction) =>
-                getSuggestedCardStatementMonth(selectedCardDetail, transaction.date, transaction.date.slice(0, 7)),
+                getCardStatementMonthForTransaction(selectedCardDetail, transaction),
               ),
           ],
         ),
@@ -1647,8 +1732,7 @@ export function FinanceApp() {
           (transaction) =>
             transaction.cardId === selectedCardDetail.id &&
             transaction.cardMode === "credit" &&
-            getSuggestedCardStatementMonth(selectedCardDetail, transaction.date, transaction.date.slice(0, 7)) ===
-              selectedCardStatementMonth,
+            getCardStatementMonthForTransaction(selectedCardDetail, transaction) === selectedCardStatementMonth,
         )
         .sort((left, right) => left.date.localeCompare(right.date))
     : [];
@@ -1659,11 +1743,11 @@ export function FinanceApp() {
     (sum, transaction) => sum + transaction.amount,
     0,
   );
-  const selectedCardOpenStatementTotal = selectedCardDetail
-    ? getOpenCardStatementTotal(selectedCardDetail.id, selectedCardStatementMonth)
-    : 0;
+  const selectedCardLimitSnapshot = selectedCardDetail
+    ? getCardAvailableLimit(selectedCardDetail.id, selectedCardStatementMonth)
+    : { committed: 0, available: 0, limit: 0 };
   const selectedCardAvailableLimit = selectedCardDetail
-    ? Math.max(0, selectedCardDetail.creditLimit - selectedCardOpenStatementTotal)
+    ? Math.max(0, selectedCardLimitSnapshot.available)
     : 0;
   const selectedCardStatementAutoBill = selectedCardDetail
     ? autoCardBills.find(
@@ -2146,6 +2230,7 @@ export function FinanceApp() {
 
   function handleAddTransaction(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setDraftTransactionError(null);
 
     const amount = Number(draftTransaction.amount.replace(",", "."));
     if (!amount || !draftTransaction.title.trim()) {
@@ -2157,12 +2242,38 @@ export function FinanceApp() {
       return;
     }
 
-    const nextTransactions = createTransactionsFromDraft(draftTransaction, amount, category.name);
-    setTransactions((current) =>
-      [...nextTransactions, ...current].sort((left, right) => right.date.localeCompare(left.date)),
+    const editingTransaction = editingTransactionId
+      ? transactions.find((transaction) => transaction.id === editingTransactionId)
+      : undefined;
+    const nextTransactions: Transaction[] = createTransactionsFromDraft(draftTransaction, amount, category.name).map(
+      (transaction) => ({
+        ...transaction,
+        sourceBillId:
+          editingTransaction?.sourceBillId ??
+          (transaction as Partial<Transaction>).sourceBillId,
+      }),
+    );
+    const editingGroupId =
+      editingTransactionScope === "group" ? editingTransaction?.installmentGroupId : undefined;
+    const baseTransactions = editingTransactionId
+      ? transactions.filter((transaction) =>
+          editingGroupId
+            ? transaction.installmentGroupId !== editingGroupId
+            : transaction.id !== editingTransactionId,
+        )
+      : transactions;
+    const creditLimitError = getCreditLimitErrorForTransactions(nextTransactions, baseTransactions, selectedMonth);
+
+    if (creditLimitError) {
+      setDraftTransactionError(creditLimitError);
+      return;
+    }
+
+    setTransactions(() =>
+      [...nextTransactions, ...baseTransactions].sort((left, right) => right.date.localeCompare(left.date)),
     );
 
-    if (draftTransaction.type === "expense") {
+    if (!editingTransactionId && draftTransaction.type === "expense") {
       const firstTransaction = nextTransactions[0];
       const paymentDetails = {
         paymentMethod: firstTransaction.paymentMethod,
@@ -2314,6 +2425,8 @@ export function FinanceApp() {
       installments: 1,
       linkedPlannedPurchaseId: "",
     }));
+    setEditingTransactionId(null);
+    setEditingTransactionScope("single");
     setIsTransactionModalOpen(false);
   }
 
@@ -3172,17 +3285,11 @@ export function FinanceApp() {
   }
 
   function openCardDetails(cardId: string, statementMonth?: string) {
+    const card = cards.find((item) => item.id === cardId);
     const cardTransactions = transactions
       .filter((transaction) => transaction.cardId === cardId && transaction.cardMode === "credit")
-      .map((transaction) =>
-        getSuggestedCardStatementMonth(
-          cards.find((card) => card.id === cardId),
-          transaction.date,
-          transaction.date.slice(0, 7),
-        ),
-      )
+      .map((transaction) => getCardStatementMonthForTransaction(card, transaction))
       .sort((left, right) => left.localeCompare(right));
-    const card = cards.find((item) => item.id === cardId);
 
     updateHomeLocation("cards", {
       cardId,
@@ -3207,10 +3314,12 @@ export function FinanceApp() {
   function closeCardBalanceModal() {
     setIsCardBalanceModalOpen(false);
     setDraftCardBalanceUsed("");
+    setDraftTransactionError(null);
   }
 
   function handleSaveCardBalance(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setDraftTransactionError(null);
 
     if (!selectedCardDetail) {
       return;
@@ -3227,27 +3336,36 @@ export function FinanceApp() {
     const adjustmentDay = Math.min(28, selectedCardDetail.closingDay || 28);
     const adjustmentDate = `${selectedCardStatementMonth}-${String(adjustmentDay).padStart(2, "0")}`;
 
-    setTransactions((current) => [
-      {
-        id: crypto.randomUUID(),
-        title: `Balanco manual ${selectedCardDetail.name}`,
-        type: "expense",
-        amount: difference,
-        date: adjustmentDate,
-        categoryId: "cat-bills",
-        categoryName: "Fatura do cartao",
-        paymentMethod: "credit_card",
-        status: "paid",
-        expenseKind: "variable",
-        accountId: selectedCardDetail.linkedAccountId ?? settings.defaultAccountId,
-        cardId: selectedCardDetail.id,
-        cardMode: "credit",
-        description: `Ajuste manual para fechar a fatura de ${formatMonthLabel(
-          monthValueToDate(selectedCardStatementMonth),
-        )}.`,
-      },
-      ...current,
-    ]);
+    const adjustmentTransaction: Transaction = {
+      id: crypto.randomUUID(),
+      title: `Balanco manual ${selectedCardDetail.name}`,
+      type: "expense",
+      amount: difference,
+      date: adjustmentDate,
+      categoryId: "cat-bills",
+      categoryName: "Fatura do cartao",
+      paymentMethod: "credit_card",
+      status: "paid",
+      expenseKind: "variable",
+      accountId: selectedCardDetail.linkedAccountId ?? settings.defaultAccountId,
+      cardId: selectedCardDetail.id,
+      cardMode: "credit",
+      description: `Ajuste manual para fechar a fatura de ${formatMonthLabel(
+        monthValueToDate(selectedCardStatementMonth),
+      )}.`,
+    };
+    const creditLimitError = getCreditLimitErrorForTransactions(
+      [adjustmentTransaction],
+      transactions,
+      selectedCardStatementMonth,
+    );
+
+    if (creditLimitError) {
+      setDraftTransactionError(creditLimitError);
+      return;
+    }
+
+    setTransactions((current) => [adjustmentTransaction, ...current]);
 
     closeCardBalanceModal();
   }
@@ -3255,6 +3373,7 @@ export function FinanceApp() {
   function openBillModal(bill?: Bill) {
     setEditingBillId(bill?.id ?? null);
     setDraftBill(createBillDraft(bill));
+    setDraftBillError(null);
     setIsBillModalOpen(true);
   }
 
@@ -3263,6 +3382,7 @@ export function FinanceApp() {
     setEditingBillId(null);
     setEditingDebtId(null);
     setDraftBill(createBillDraft());
+    setDraftBillError(null);
     setDraftDebt(initialDraftDebt);
     setIsNewAccountModalOpen(true);
   }
@@ -3271,16 +3391,19 @@ export function FinanceApp() {
     setIsNewAccountModalOpen(false);
     setNewAccountKind("bill");
     setDraftBill(createBillDraft());
+    setDraftBillError(null);
     setDraftDebt(initialDraftDebt);
   }
 
   function closeBillModal() {
     setEditingBillId(null);
     setDraftBill(createBillDraft());
+    setDraftBillError(null);
     setIsBillModalOpen(false);
   }
 
   function persistBillDraft(targetBillId: string | null = editingBillId) {
+    setDraftBillError(null);
     const normalizedCategoryId = isHiddenAccountCategoryId(draftBill.categoryId)
       ? defaultBillCategoryId
       : draftBill.categoryId;
@@ -3345,6 +3468,34 @@ export function FinanceApp() {
             recurringGroupId: undefined,
           },
         ];
+    const nextLinkedTransactions = nextBills.flatMap((bill) => {
+      if (isCreditLinkedBill(bill)) {
+        return buildLinkedTransactionsFromBill(bill);
+      }
+
+      return bill.status === "paid" ? buildSettlementTransactionsFromBill(bill) : [];
+    });
+    const nextTransactionBase =
+      targetBillId && existingGroupId && existingBill?.isRecurring
+        ? (() => {
+            const previousBillIds = new Set(existingGroupBills.map((bill) => bill.id));
+            return transactions.filter(
+              (transaction) => !transaction.sourceBillId || !previousBillIds.has(transaction.sourceBillId),
+            );
+          })()
+        : targetBillId
+          ? transactions.filter((transaction) => transaction.sourceBillId !== targetBillId)
+          : transactions;
+    const creditLimitError = getCreditLimitErrorForTransactions(
+      nextLinkedTransactions,
+      nextTransactionBase,
+      selectedMonth,
+    );
+
+    if (creditLimitError) {
+      setDraftBillError(creditLimitError);
+      return false;
+    }
 
     setBills((current) => {
       if (targetBillId && existingGroupId && existingBill?.isRecurring) {
@@ -3383,13 +3534,7 @@ export function FinanceApp() {
       const cleanedTransactions = targetBillId
         ? current.filter((transaction) => transaction.sourceBillId !== targetBillId)
         : current;
-      const linkedTransactions = nextBills.flatMap((bill) => {
-        if (isCreditLinkedBill(bill)) {
-          return buildLinkedTransactionsFromBill(bill);
-        }
-
-        return bill.status === "paid" ? buildSettlementTransactionsFromBill(bill) : [];
-      });
+      const linkedTransactions = nextLinkedTransactions;
 
       return [...linkedTransactions, ...cleanedTransactions].sort((left, right) =>
         right.date.localeCompare(left.date),
@@ -3881,7 +4026,7 @@ export function FinanceApp() {
           transaction.type === "expense" &&
           transaction.cardId === cardId &&
           transaction.cardMode === "credit" &&
-          getSuggestedCardStatementMonth(card, transaction.date, transaction.date.slice(0, 7)) === statementMonth,
+          getCardStatementMonthForTransaction(card, transaction) === statementMonth,
       )
       .map((transaction, index) => {
         const sourceBill = transaction.sourceBillId
@@ -3913,7 +4058,7 @@ export function FinanceApp() {
             transaction.cardId === cardId &&
             transaction.cardMode === "credit" &&
             transaction.sourceBillId &&
-            getSuggestedCardStatementMonth(card, transaction.date, transaction.date.slice(0, 7)) === statementMonth,
+            getCardStatementMonthForTransaction(card, transaction) === statementMonth,
         )
         .map((transaction) => transaction.sourceBillId),
     );
@@ -3924,7 +4069,7 @@ export function FinanceApp() {
           isCreditLinkedBill(bill) &&
           bill.plannedCardId === cardId &&
           !transactionBillIds.has(bill.id) &&
-          getSuggestedCardStatementMonth(card, bill.dueDate, bill.dueDate.slice(0, 7)) === statementMonth,
+          getCardStatementMonthForBill(card, bill) === statementMonth,
       )
       .map((bill, index) => ({
         id: `bill-${bill.id}`,
@@ -5500,12 +5645,107 @@ export function FinanceApp() {
     ]);
   }
 
-  function openTransactionModal() {
+  function createTransactionDraft(transaction?: Transaction, scope: "single" | "group" = "single"): DraftTransaction {
+    if (!transaction) {
+      return initialDraftTransaction;
+    }
+
+    const groupTransactions =
+      scope === "group" && transaction.installmentGroupId
+        ? transactions
+            .filter((item) => item.installmentGroupId === transaction.installmentGroupId)
+            .sort((left, right) => (left.installmentNumber ?? 0) - (right.installmentNumber ?? 0))
+        : [transaction];
+    const firstTransaction = groupTransactions[0] ?? transaction;
+    const totalAmount = groupTransactions.reduce((sum, item) => sum + item.amount, 0);
+    const paymentOption: DraftTransaction["paymentOption"] =
+      firstTransaction.paymentMethod === "credit_card" || firstTransaction.paymentMethod === "debit_card"
+        ? "card"
+        : firstTransaction.paymentMethod;
+
+    return {
+      title: firstTransaction.title,
+      type: firstTransaction.type,
+      operationKind:
+        firstTransaction.type === "income"
+          ? "income"
+          : firstTransaction.expenseKind === "investment"
+            ? "investment"
+            : firstTransaction.expenseKind === "debt_payment"
+              ? "debt_payment"
+              : firstTransaction.expenseKind === "basic_bill"
+                ? "basic_bill"
+                : firstTransaction.expenseKind === "planned_purchase"
+                  ? "planned_purchase"
+                  : "variable",
+      amount: String(Number(totalAmount.toFixed(2))),
+      date: firstTransaction.date,
+      categoryId: firstTransaction.categoryId,
+      paymentOption,
+      cardId: firstTransaction.cardId ?? settings.defaultCardId,
+      cardMode: firstTransaction.cardMode ?? "credit",
+      installments: scope === "group" ? Math.max(1, groupTransactions.length) : 1,
+      accountId: firstTransaction.accountId ?? settings.defaultAccountId,
+      description: firstTransaction.description ?? firstTransaction.notes ?? "",
+      linkedPlannedPurchaseId: firstTransaction.linkedPlannedPurchaseId ?? "",
+    };
+  }
+
+  function openTransactionModal(transaction?: Transaction, scope: "single" | "group" = "single") {
+    setEditingTransactionId(transaction?.id ?? null);
+    setEditingTransactionScope(scope);
+    setDraftTransaction(createTransactionDraft(transaction, scope));
+    setDraftTransactionError(null);
     setIsTransactionModalOpen(true);
   }
 
   function closeTransactionModal() {
     setIsTransactionModalOpen(false);
+    setEditingTransactionId(null);
+    setEditingTransactionScope("single");
+    setDraftTransaction(initialDraftTransaction);
+    setDraftTransactionError(null);
+  }
+
+  function requestTransactionAction(transaction: Transaction, action: "edit" | "delete") {
+    if (transaction.installmentGroupId && (transaction.installmentTotal ?? 1) > 1) {
+      setTransactionScopePrompt({ action, transactionId: transaction.id });
+      return;
+    }
+
+    if (action === "edit") {
+      openTransactionModal(transaction, "single");
+      return;
+    }
+
+    setTransactions((current) => current.filter((item) => item.id !== transaction.id));
+  }
+
+  function applyTransactionScopeAction(scope: "single" | "group") {
+    if (!transactionScopePrompt) {
+      return;
+    }
+
+    const transaction = transactions.find((item) => item.id === transactionScopePrompt.transactionId);
+    if (!transaction) {
+      setTransactionScopePrompt(null);
+      return;
+    }
+
+    if (transactionScopePrompt.action === "edit") {
+      openTransactionModal(transaction, scope);
+      setTransactionScopePrompt(null);
+      return;
+    }
+
+    setTransactions((current) =>
+      current.filter((item) =>
+        scope === "group" && transaction.installmentGroupId
+          ? item.installmentGroupId !== transaction.installmentGroupId
+          : item.id !== transaction.id,
+      ),
+    );
+    setTransactionScopePrompt(null);
   }
 
   function getAvailableDraftModes() {
@@ -6403,7 +6643,7 @@ export function FinanceApp() {
               action={
                 <button
                   type="button"
-                  onClick={openTransactionModal}
+                  onClick={() => openTransactionModal()}
                   className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-900 text-2xl leading-none text-white transition hover:bg-slate-700"
                   aria-label="Nova transacao"
                 >
@@ -6486,9 +6726,15 @@ export function FinanceApp() {
             <div className="w-full max-w-2xl rounded-[30px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.24em] text-sky-600">Nova transacao</p>
+                  <p className="text-xs uppercase tracking-[0.24em] text-sky-600">
+                    {editingTransactionId ? "Editar transacao" : "Nova transacao"}
+                  </p>
                   <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                    Adicionar lancamento
+                    {editingTransactionId
+                      ? editingTransactionScope === "group"
+                        ? "Editar parcelamento"
+                        : "Editar lancamento"
+                      : "Adicionar lancamento"}
                   </h3>
                   <p className="mt-2 text-sm text-slate-500">
                     Se a forma de pagamento for cartao, a modalidade define se existe parcela ou nao.
@@ -6505,6 +6751,11 @@ export function FinanceApp() {
               </div>
 
               <form onSubmit={handleAddTransaction} className="mt-6 space-y-4">
+                {draftTransactionError ? (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                    {draftTransactionError}
+                  </div>
+                ) : null}
                 <div className="grid gap-3 sm:grid-cols-2">
                   <FormField label="Titulo">
                     <input
@@ -6791,10 +7042,48 @@ export function FinanceApp() {
                     type="submit"
                     className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
                   >
-                    Salvar transacao
+                    {editingTransactionId ? "Salvar alteracao" : "Salvar transacao"}
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        ) : null}
+        {transactionScopePrompt ? (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+            <div className="w-full max-w-md rounded-[28px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
+              <p className="text-xs uppercase tracking-[0.24em] text-sky-600">
+                Parcela detectada
+              </p>
+              <h3 className="mt-2 text-xl font-semibold text-slate-950">
+                Aplicar em qual parte?
+              </h3>
+              <p className="mt-2 text-sm text-slate-500">
+                Esse lancamento faz parte de um parcelamento. Escolha se a acao vale so para esta parcela ou para todas.
+              </p>
+              <div className="mt-6 grid gap-3">
+                <button
+                  type="button"
+                  onClick={() => applyTransactionScopeAction("single")}
+                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  So esta parcela
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyTransactionScopeAction("group")}
+                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
+                >
+                  Todas as parcelas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTransactionScopePrompt(null)}
+                  className="rounded-2xl px-4 py-3 text-sm font-semibold text-slate-500 transition hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+              </div>
             </div>
           </div>
         ) : null}
@@ -8481,6 +8770,11 @@ export function FinanceApp() {
 
             <form onSubmit={handleSaveBill} className="flex min-h-0 flex-1 flex-col">
               <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+                {draftBillError ? (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                    {draftBillError}
+                  </div>
+                ) : null}
                 {renderBillFormFields("edit")}
               </div>
               <div className="flex shrink-0 justify-end gap-3 border-t border-slate-200/80 bg-white px-6 py-4">
@@ -8533,6 +8827,11 @@ export function FinanceApp() {
 
             <form onSubmit={handleSaveNewAccount} className="flex min-h-0 flex-1 flex-col">
               <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+                {draftBillError ? (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                    {draftBillError}
+                  </div>
+                ) : null}
                 <FormField label="Tipo">
                   <div className="grid gap-3 sm:grid-cols-2">
                     <button
@@ -9649,6 +9948,12 @@ export function FinanceApp() {
                 support={selectedCardStatementDueLabel ? `Vence ${selectedCardStatementDueLabel}` : "Sem fatura"}
               />
             </div>
+            {selectedCardLimitSnapshot.committed > selectedCardDetail.creditLimit + 0.009 ? (
+              <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                Limite excedido nas proximas 12 faturas: {formatCurrency(selectedCardLimitSnapshot.committed)} de{" "}
+                {formatCurrency(selectedCardDetail.creditLimit)}.
+              </div>
+            ) : null}
           </div>
 
           <Panel title="Meses da fatura" description="Passe pelos meses e veja o que estava dentro de cada fechamento.">
@@ -9659,11 +9964,7 @@ export function FinanceApp() {
                     (transaction) =>
                       transaction.cardId === selectedCardDetail.id &&
                       transaction.cardMode === "credit" &&
-                      getSuggestedCardStatementMonth(
-                        selectedCardDetail,
-                        transaction.date,
-                        transaction.date.slice(0, 7),
-                      ) === monthValue,
+                      getCardStatementMonthForTransaction(selectedCardDetail, transaction) === monthValue,
                   )
                   .reduce((sum, transaction) => sum + transaction.amount, 0);
 
@@ -9725,6 +10026,22 @@ export function FinanceApp() {
                             {transaction.status}
                           </p>
                         </div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => requestTransactionAction(transaction, "edit")}
+                          className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => requestTransactionAction(transaction, "delete")}
+                          className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+                        >
+                          Excluir
+                        </button>
                       </div>
                     </div>
                   ))
@@ -9823,7 +10140,7 @@ export function FinanceApp() {
                   <SimulationRow
                     label="Limite restante"
                     value={formatCurrency(selectedCardAvailableLimit)}
-                    support="Considerando faturas abertas deste mes em diante"
+                    support="Considerando as proximas 12 faturas"
                   />
                 </div>
               </Panel>
@@ -10014,6 +10331,11 @@ export function FinanceApp() {
           </div>
 
           <form onSubmit={handleSaveCardBalance} className="mt-6 space-y-4">
+            {draftTransactionError ? (
+              <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                {draftTransactionError}
+              </div>
+            ) : null}
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
               <p className="text-sm text-slate-500">Ja registrado nessa fatura</p>
               <p className="mt-2 text-2xl font-semibold text-slate-950">
