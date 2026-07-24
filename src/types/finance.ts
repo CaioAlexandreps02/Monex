@@ -1,3 +1,5 @@
+import type { LucideIcon } from "lucide-react";
+
 export type ViewId =
   | "home"
   | "transactions"
@@ -31,6 +33,7 @@ export interface NavItem {
   label: string;
   shortLabel: string;
   description: string;
+  icon?: LucideIcon;
 }
 
 export interface UserProfile {

@@ -15,6 +15,13 @@ import type {
   UserProfile,
 } from "@/types/finance";
 
+import {
+  LayoutDashboard,
+  ArrowLeftRight,
+  BarChart3,
+  Settings as SettingsIcon,
+} from "lucide-react";
+
 export const referenceDate = "2026-04-14";
 
 function createCategoryBudgets(
@@ -84,24 +91,28 @@ export const navItems: NavItem[] = [
     label: "Home",
     shortLabel: "Home",
     description: "Planilha principal, planejamento e contas futuras",
+    icon: LayoutDashboard,
   },
   {
     id: "transactions",
     label: "Transacoes",
     shortLabel: "Mes",
     description: "Lancamentos e revisao do mes atual",
+    icon: ArrowLeftRight,
   },
   {
     id: "history",
     label: "Historico",
     shortLabel: "Passado",
     description: "Analise historica de gastos, categorias e tendencias",
+    icon: BarChart3,
   },
   {
     id: "settings",
     label: "Configuracoes",
     shortLabel: "Ajustes",
     description: "Metas, contas padrao e arquitetura futura",
+    icon: SettingsIcon,
   },
 ];
 

@@ -3,6 +3,7 @@ import { navItems } from "@/lib/mock-data";
 import type { FinancePriority, ViewId } from "@/types/finance";
 
 import Image from "next/image";
+import type { LucideIcon } from "lucide-react";
 
 const priorityClasses: Record<string, string> = {
   "Urgente": "bg-red-50 text-red-600 ring-red-200",
@@ -42,12 +43,13 @@ export function NavigationRail({
               type="button"
               onClick={() => onNavigate(item.id)}
               aria-pressed={activeView === item.id}
-              className={`flex w-full items-center rounded-2xl px-4 py-2.5 text-left text-sm transition ${
+              className={`flex w-full items-center gap-3 rounded-2xl px-4 py-2.5 text-left text-sm transition ${
                 activeView === item.id
                   ? "bg-white text-slate-950 shadow-[0_20px_40px_rgba(255,255,255,0.18)]"
                   : "bg-white/8 text-white/82 hover:bg-white/14"
               }`}
             >
+              {item.icon && <item.icon className="h-[18px] w-[18px] shrink-0" />}
               <span className="font-semibold">{item.label}</span>
             </button>
           ))}
@@ -75,12 +77,13 @@ export function MobileNavigation({
               type="button"
               onClick={() => onNavigate(item.id)}
               aria-pressed={activeView === item.id}
-              className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+              className={`flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition ${
                 activeView === item.id
                   ? "bg-slate-900 text-white"
                   : "bg-white text-slate-700 shadow-[0_12px_32px_rgba(15,23,42,0.08)]"
               }`}
             >
+              {item.icon && <item.icon className="h-4 w-4" />}
               {item.shortLabel}
             </button>
           ))}
@@ -165,15 +168,30 @@ export function MetricCard({
   label,
   value,
   tone,
+  icon: Icon,
 }: {
   label: string;
   value: string;
   support?: string;
   tone: "positive" | "negative" | "neutral";
+  icon?: LucideIcon;
 }) {
   return (
     <div className="rounded-[26px] border border-white/60 bg-white/85 p-5 shadow-[0_20px_48px_rgba(17,34,68,0.07)]">
-      <p className="text-sm font-medium text-slate-500">{label}</p>
+      <div className="flex items-center gap-2">
+        {Icon && (
+          <Icon
+            className={`h-5 w-5 ${
+              tone === "positive"
+                ? "text-emerald-500"
+                : tone === "negative"
+                  ? "text-red-400"
+                  : "text-slate-400"
+            }`}
+          />
+        )}
+        <p className="text-sm font-medium text-slate-500">{label}</p>
+      </div>
       <p
         className={`mt-2 text-2xl font-semibold tracking-tight ${
           tone === "positive"
