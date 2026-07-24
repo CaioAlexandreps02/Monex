@@ -63,6 +63,7 @@ import type {
 import {
   CategoryDonut,
   ConfigField,
+  CustomSelect,
   FormField,
   InfoBlock,
   LegendBadge,
@@ -82,6 +83,8 @@ import {
 import {
   Table,
   Target,
+  Tag,
+  Building2,
   Wallet,
   CreditCard,
   Plus,
@@ -997,6 +1000,13 @@ export function FinanceApp() {
         {getCategoryOptionLabel(category)}
       </option>
     ));
+  }
+
+  function getCategorySelectOptions(type: Transaction["type"], options?: { includeHidden?: boolean }) {
+    return getSelectableCategories(type, options).map((category) => ({
+      value: category.id,
+      label: getCategoryOptionLabel(category),
+    }));
   }
 
   const buildPersistedState = useCallback(
@@ -5854,18 +5864,17 @@ export function FinanceApp() {
                   >
                     Mes de analise
                   </label>
-                  <select
+                  <CustomSelect
                     id="header-month-select"
                     value={selectedMonth}
-                    onChange={(event) => handleMonthChange(event.target.value)}
-                    className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800 outline-none"
-                  >
-                    {availableAnalysisMonths.map((monthValue) => (
-                      <option key={monthValue} value={monthValue}>
-                        {formatMonthLabel(monthValueToDate(monthValue))}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={handleMonthChange}
+                    options={availableAnalysisMonths.map((monthValue) => ({
+                      value: monthValue,
+                      label: formatMonthLabel(monthValueToDate(monthValue)),
+                      icon: Calendar,
+                    }))}
+                    className="w-full"
+                  />
                 </div>
                 <div className="relative">
                   <button
@@ -6725,29 +6734,28 @@ export function FinanceApp() {
                   placeholder="Buscar transacao..."
                   className="field"
                 />
-                <select
+                <CustomSelect
                   value={transactionTypeFilter}
-                  onChange={(event) =>
-                    setTransactionTypeFilter(event.target.value as "all" | "income" | "expense")
+                  onChange={(val) =>
+                    setTransactionTypeFilter(val as "all" | "income" | "expense")
                   }
-                  className="field"
-                >
-                  <option value="all">Todos os tipos</option>
-                  <option value="income">Entradas</option>
-                  <option value="expense">Saidas</option>
-                </select>
-                <select
+                  options={[
+                    { value: "all", label: "Todos os tipos" },
+                    { value: "income", label: "Entradas" },
+                    { value: "expense", label: "Saidas" },
+                  ]}
+                />
+                <CustomSelect
                   value={paymentFilter}
-                  onChange={(event) => setPaymentFilter(event.target.value as "all" | PaymentMethod)}
-                  className="field"
-                >
-                  <option value="all">Todos os meios</option>
-                  {Object.entries(paymentLabels).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setPaymentFilter(val as "all" | PaymentMethod)}
+                  options={[
+                    { value: "all", label: "Todos os meios" },
+                    ...Object.entries(paymentLabels).map(([value, label]) => ({
+                      value,
+                      label,
+                    })),
+                  ]}
+                />
               </div>
 
               <div className="mt-5 space-y-3">
@@ -6836,37 +6844,38 @@ export function FinanceApp() {
                     />
                   </FormField>
                   <FormField label="Tipo">
-                    <select
+                    <CustomSelect
                       value={draftTransaction.type}
-                      onChange={(event) =>
+                      onChange={(val) => {
+                        const newType = val as "income" | "expense";
                         setDraftTransaction((current) => ({
                           ...current,
-                          type: event.target.value as "income" | "expense",
-                          operationKind: event.target.value === "income" ? "income" : "variable",
+                          type: newType,
+                          operationKind: newType === "income" ? "income" : "variable",
                           categoryId: getOperationDefaultCategoryId(
-                            event.target.value === "income" ? "income" : "variable",
-                            event.target.value as "income" | "expense",
+                            newType === "income" ? "income" : "variable",
+                            newType,
                           ),
                           paymentOption:
-                            event.target.value === "income" ? "bank_transfer" : current.paymentOption,
+                            newType === "income" ? "bank_transfer" : current.paymentOption,
                           linkedPlannedPurchaseId:
-                            event.target.value === "income" ? "" : current.linkedPlannedPurchaseId,
-                        }))
-                      }
-                      className="field"
-                    >
-                      <option value="expense">Saida</option>
-                      <option value="income">Entrada</option>
-                    </select>
+                            newType === "income" ? "" : current.linkedPlannedPurchaseId,
+                        }));
+                      }}
+                      options={[
+                        { value: "expense", label: "Saida" },
+                        { value: "income", label: "Entrada" },
+                      ]}
+                    />
                   </FormField>
                 </div>
 
                 {draftTransaction.type === "expense" ? (
                   <FormField label="Tipo de lancamento">
-                    <select
+                    <CustomSelect
                       value={draftTransaction.operationKind}
-                      onChange={(event) => {
-                        const operationKind = event.target.value as DraftTransaction["operationKind"];
+                      onChange={(val) => {
+                        const operationKind = val as DraftTransaction["operationKind"];
                         setDraftTransaction((current) => ({
                           ...current,
                           operationKind,
@@ -6875,15 +6884,15 @@ export function FinanceApp() {
                             operationKind === "planned_purchase" ? current.linkedPlannedPurchaseId : "",
                         }));
                       }}
-                      className="field"
-                    >
-                      <option value="variable">Gasto comum</option>
-                      <option value="basic_bill">Conta normal</option>
-                      <option value="recurring_bill">Conta recorrente</option>
-                      <option value="debt_payment">Divida / abatimento</option>
-                      <option value="investment">Investimento</option>
-                      <option value="planned_purchase">Compra planejada vinculada</option>
-                    </select>
+                      options={[
+                        { value: "variable", label: "Gasto comum" },
+                        { value: "basic_bill", label: "Conta normal" },
+                        { value: "recurring_bill", label: "Conta recorrente" },
+                        { value: "debt_payment", label: "Divida / abatimento" },
+                        { value: "investment", label: "Investimento" },
+                        { value: "planned_purchase", label: "Compra planejada vinculada" },
+                      ]}
+                    />
                   </FormField>
                 ) : null}
 
@@ -6913,95 +6922,86 @@ export function FinanceApp() {
 
                 <div className="grid gap-3 sm:grid-cols-2">
                   <FormField label="Categoria">
-                    <select
+                    <CustomSelect
                       value={draftTransaction.categoryId}
-                      onChange={(event) =>
+                      onChange={(val) =>
                         setDraftTransaction((current) => ({
                           ...current,
-                          categoryId: event.target.value,
+                          categoryId: val,
                         }))
                       }
-                      className="field"
-                    >
-                      {renderCategoryOptions(draftTransaction.type, {
+                      options={getCategorySelectOptions(draftTransaction.type, {
                         includeHidden:
                           draftTransaction.operationKind === "investment" ||
                           draftTransaction.operationKind === "debt_payment",
-                      })}
-                    </select>
+                      }).map((opt) => ({ ...opt, icon: Tag }))}
+                    />
                   </FormField>
                   <FormField label="Forma de pagamento">
-                    <select
+                    <CustomSelect
                       value={draftTransaction.paymentOption}
-                      onChange={(event) =>
+                      onChange={(val) =>
                         setDraftTransaction((current) => ({
                           ...current,
-                          paymentOption: event.target.value as DraftTransaction["paymentOption"],
+                          paymentOption: val as DraftTransaction["paymentOption"],
                         }))
                       }
-                      className="field"
-                    >
-                      {draftTransaction.type === "income" ? (
-                        <>
-                          <option value="bank_transfer">Transferencia</option>
-                          <option value="pix">Pix</option>
-                          <option value="cash">Dinheiro</option>
-                        </>
-                      ) : (
-                        <>
-                          <option value="pix">Pix</option>
-                          <option value="cash">Dinheiro</option>
-                          <option value="bank_transfer">Transferencia</option>
-                          <option value="card">Cartao</option>
-                        </>
-                      )}
-                    </select>
+                      options={
+                        draftTransaction.type === "income"
+                          ? [
+                              { value: "bank_transfer", label: "Transferencia" },
+                              { value: "pix", label: "Pix" },
+                              { value: "cash", label: "Dinheiro" },
+                            ]
+                          : [
+                              { value: "pix", label: "Pix" },
+                              { value: "cash", label: "Dinheiro" },
+                              { value: "bank_transfer", label: "Transferencia" },
+                              { value: "card", label: "Cartao" },
+                            ]
+                      }
+                    />
                   </FormField>
                 </div>
 
                 {draftTransaction.type === "expense" && draftTransaction.paymentOption === "card" ? (
                   <div className="grid gap-3 sm:grid-cols-2">
                     <FormField label="Cartao">
-                      <select
+                      <CustomSelect
                         value={draftTransaction.cardId}
-                        onChange={(event) => {
-                          const nextCard = cards.find((card) => card.id === event.target.value) ?? cards[0];
+                        onChange={(val) => {
+                          const nextCard = cards.find((card) => card.id === val) ?? cards[0];
                           const nextMode =
                             nextCard.availableMode === "both" ? draftTransaction.cardMode : nextCard.availableMode;
                           setDraftTransaction((current) => ({
                             ...current,
-                            cardId: event.target.value,
+                            cardId: val,
                             cardMode: nextMode,
                             installments: nextMode === "debit" ? 1 : current.installments,
                           }));
                         }}
-                        className="field"
-                      >
-                        {cards.map((card) => (
-                          <option key={card.id} value={card.id}>
-                            {card.name}
-                          </option>
-                        ))}
-                      </select>
+                        options={cards.map((card) => ({
+                          value: card.id,
+                          label: card.name,
+                          icon: CreditCard,
+                        }))}
+                      />
                     </FormField>
                     <FormField label="Modalidade">
-                      <select
+                      <CustomSelect
                         value={draftTransaction.cardMode}
-                        onChange={(event) =>
+                        onChange={(val) =>
                           setDraftTransaction((current) => ({
                             ...current,
-                            cardMode: event.target.value as CardMode,
-                            installments: event.target.value === "debit" ? 1 : current.installments,
+                            cardMode: val as CardMode,
+                            installments: val === "debit" ? 1 : current.installments,
                           }))
                         }
-                        className="field"
-                      >
-                        {getAvailableDraftModes().map((mode) => (
-                          <option key={mode} value={mode}>
-                            {mode === "credit" ? "Credito" : "Debito"}
-                          </option>
-                        ))}
-                      </select>
+                        options={getAvailableDraftModes().map((mode) => ({
+                          value: mode,
+                          label: mode === "credit" ? "Credito" : "Debito",
+                        }))}
+                      />
                   </FormField>
                 </div>
                 ) : null}
@@ -7033,10 +7033,10 @@ export function FinanceApp() {
 
                 {draftTransaction.type === "expense" && activePlannedPurchases.length ? (
                   <FormField label="Vincular compra planejada">
-                    <select
+                    <CustomSelect
                       value={draftTransaction.linkedPlannedPurchaseId}
-                      onChange={(event) => {
-                        const purchase = activePlannedPurchases.find((item) => item.id === event.target.value);
+                      onChange={(val) => {
+                        const purchase = activePlannedPurchases.find((item) => item.id === val);
                         setDraftTransaction((current) => {
                           if (!purchase) {
                             return { ...current, linkedPlannedPurchaseId: "" };
@@ -7071,15 +7071,12 @@ export function FinanceApp() {
                           };
                         });
                       }}
-                      className="field"
-                    >
-                      <option value="">Nenhuma</option>
-                      {activePlannedPurchases.map((purchase) => (
-                        <option key={purchase.id} value={purchase.id}>
-                          {purchase.name}
-                        </option>
-                      ))}
-                    </select>
+                      placeholder="Nenhuma"
+                      options={activePlannedPurchases.map((purchase) => ({
+                        value: purchase.id,
+                        label: purchase.name,
+                      }))}
+                    />
                   </FormField>
                 ) : null}
 
@@ -7265,69 +7262,51 @@ export function FinanceApp() {
 
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <FormField label="Pagamento do aporte">
-                  <select
+                  <CustomSelect
                     value={draftInvestment.paymentMethod}
-                    onChange={(event) =>
+                    onChange={(val) =>
                       setDraftInvestment((current) => ({
                         ...current,
-                        paymentMethod: event.target.value as PaymentMethod,
+                        paymentMethod: val as PaymentMethod,
                       }))
                     }
-                    className="field"
-                  >
-                    {Object.entries(paymentLabels).map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
+                    options={Object.entries(paymentLabels).map(([value, label]) => ({ value, label }))}
+                  />
                 </FormField>
                 <FormField label="Conta">
-                  <select
+                  <CustomSelect
                     value={draftInvestment.accountId}
-                    onChange={(event) =>
-                      setDraftInvestment((current) => ({ ...current, accountId: event.target.value }))
+                    onChange={(val) =>
+                      setDraftInvestment((current) => ({ ...current, accountId: val }))
                     }
-                    className="field"
-                  >
-                    {accounts.map((account) => (
-                      <option key={account.id} value={account.id}>
-                        {account.name}
-                      </option>
-                    ))}
-                  </select>
+                    options={accounts.map((account) => ({ value: account.id, label: account.name, icon: Building2 }))}
+                  />
                 </FormField>
                 {usesCard ? (
                   <>
                     <FormField label="Cartao">
-                      <select
+                      <CustomSelect
                         value={draftInvestment.cardId}
-                        onChange={(event) =>
-                          setDraftInvestment((current) => ({ ...current, cardId: event.target.value }))
+                        onChange={(val) =>
+                          setDraftInvestment((current) => ({ ...current, cardId: val }))
                         }
-                        className="field"
-                      >
-                        {cards.map((card) => (
-                          <option key={card.id} value={card.id}>
-                            {card.name}
-                          </option>
-                        ))}
-                      </select>
+                        options={cards.map((card) => ({ value: card.id, label: card.name, icon: CreditCard }))}
+                      />
                     </FormField>
                     <FormField label="Modalidade">
-                      <select
+                      <CustomSelect
                         value={draftInvestment.cardMode}
-                        onChange={(event) =>
+                        onChange={(val) =>
                           setDraftInvestment((current) => ({
                             ...current,
-                            cardMode: event.target.value as CardMode,
+                            cardMode: val as CardMode,
                           }))
                         }
-                        className="field"
-                      >
-                        <option value="credit">Credito</option>
-                        <option value="debit">Debito</option>
-                      </select>
+                        options={[
+                          { value: "credit", label: "Credito" },
+                          { value: "debit", label: "Debito" },
+                        ]}
+                      />
                     </FormField>
                   </>
                 ) : null}
@@ -7402,27 +7381,21 @@ export function FinanceApp() {
             <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
               <div className="grid gap-3 sm:grid-cols-2">
                 <FormField label="Investimento">
-                  <select
+                  <CustomSelect
                     value={draftInvestmentContribution.investmentId}
-                    onChange={(event) => {
-                      const nextInvestment = investments.find((item) => item.id === event.target.value);
+                    onChange={(val) => {
+                      const nextInvestment = investments.find((item) => item.id === val);
                       setDraftInvestmentContribution((current) => ({
                         ...current,
-                        investmentId: event.target.value,
+                        investmentId: val,
                         paymentMethod: nextInvestment?.paymentMethod ?? current.paymentMethod,
                         accountId: nextInvestment?.accountId ?? current.accountId,
                         cardId: nextInvestment?.cardId ?? current.cardId,
                         cardMode: nextInvestment?.cardMode ?? current.cardMode,
                       }));
                     }}
-                    className="field"
-                  >
-                    {investments.map((investment) => (
-                      <option key={investment.id} value={investment.id}>
-                        {investment.name}
-                      </option>
-                    ))}
-                  </select>
+                    options={investments.map((investment) => ({ value: investment.id, label: investment.name }))}
+                  />
                 </FormField>
                 <FormField label="Data">
                   <input
@@ -7454,78 +7427,60 @@ export function FinanceApp() {
                   />
                 </FormField>
                 <FormField label="Forma de pagamento">
-                  <select
+                  <CustomSelect
                     value={draftInvestmentContribution.paymentMethod}
-                    onChange={(event) =>
+                    onChange={(val) =>
                       setDraftInvestmentContribution((current) => ({
                         ...current,
-                        paymentMethod: event.target.value as PaymentMethod,
+                        paymentMethod: val as PaymentMethod,
                       }))
                     }
-                    className="field"
-                  >
-                    {Object.entries(paymentLabels).map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
+                    options={Object.entries(paymentLabels).map(([value, label]) => ({ value, label }))}
+                  />
                 </FormField>
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 <FormField label="Conta">
-                  <select
+                  <CustomSelect
                     value={draftInvestmentContribution.accountId}
-                    onChange={(event) =>
+                    onChange={(val) =>
                       setDraftInvestmentContribution((current) => ({
                         ...current,
-                        accountId: event.target.value,
+                        accountId: val,
                       }))
                     }
-                    className="field"
-                  >
-                    {accounts.map((account) => (
-                      <option key={account.id} value={account.id}>
-                        {account.name}
-                      </option>
-                    ))}
-                  </select>
+                    options={accounts.map((account) => ({ value: account.id, label: account.name, icon: Building2 }))}
+                  />
                 </FormField>
                 {usesCard ? (
                   <>
                     <FormField label="Cartao">
-                      <select
+                      <CustomSelect
                         value={draftInvestmentContribution.cardId}
-                        onChange={(event) =>
+                        onChange={(val) =>
                           setDraftInvestmentContribution((current) => ({
                             ...current,
-                            cardId: event.target.value,
+                            cardId: val,
                           }))
                         }
-                        className="field"
-                      >
-                        {cards.map((card) => (
-                          <option key={card.id} value={card.id}>
-                            {card.name}
-                          </option>
-                        ))}
-                      </select>
+                        options={cards.map((card) => ({ value: card.id, label: card.name, icon: CreditCard }))}
+                      />
                     </FormField>
                     <FormField label="Modalidade">
-                      <select
+                      <CustomSelect
                         value={draftInvestmentContribution.cardMode}
-                        onChange={(event) =>
+                        onChange={(val) =>
                           setDraftInvestmentContribution((current) => ({
                             ...current,
-                            cardMode: event.target.value as CardMode,
+                            cardMode: val as CardMode,
                           }))
                         }
-                        className="field"
-                      >
-                        <option value="credit">Credito</option>
-                        <option value="debit">Debito</option>
-                      </select>
+                        options={[
+                          { value: "credit", label: "Credito" },
+                          { value: "debit", label: "Debito" },
+                        ]}
+                      />
                     </FormField>
                   </>
                 ) : null}
@@ -7821,23 +7776,17 @@ export function FinanceApp() {
             <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <FormField label="Faixa">
-                <select
+                <CustomSelect
                   value={draftFixedEntry.section}
-                  onChange={(event) =>
+                  onChange={(val) =>
                     setDraftFixedEntry((current) => ({
                       ...current,
-                      section: event.target.value as FixedFlowSection,
-                      categoryId: getDefaultCategoryIdForFixedSection(event.target.value as FixedFlowSection),
+                      section: val as FixedFlowSection,
+                      categoryId: getDefaultCategoryIdForFixedSection(val as FixedFlowSection),
                     }))
                   }
-                  className="field"
-                >
-                  {fixedSectionOrder.filter((section) => section !== "Planejamento").map((section) => (
-                    <option key={section} value={section}>
-                      {fixedSectionDisplayLabels[section]}
-                    </option>
-                  ))}
-                </select>
+                  options={fixedSectionOrder.filter((section) => section !== "Planejamento").map((section) => ({ value: section, label: fixedSectionDisplayLabels[section], icon: Wallet }))}
+                />
               </FormField>
               <FormField label="Titulo">
                 <input
@@ -7850,91 +7799,67 @@ export function FinanceApp() {
                 />
               </FormField>
               <FormField label="Categoria">
-                <select
+                <CustomSelect
                   value={draftFixedEntry.categoryId}
-                  onChange={(event) =>
-                    setDraftFixedEntry((current) => ({ ...current, categoryId: event.target.value }))
+                  onChange={(val) =>
+                    setDraftFixedEntry((current) => ({ ...current, categoryId: val }))
                   }
-                  className="field"
-                >
-                  {fixedCategoryOptions.map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {getCategoryOptionLabel(category)}
-                    </option>
-                  ))}
-                </select>
+                  options={fixedCategoryOptions.map((category) => ({ value: category.id, label: getCategoryOptionLabel(category), icon: Tag }))}
+                />
               </FormField>
               <FormField label="Forma de pagamento">
-                <select
+                <CustomSelect
                   value={draftFixedEntry.paymentMethod}
-                  onChange={(event) =>
+                  onChange={(val) =>
                     setDraftFixedEntry((current) => ({
                       ...current,
-                      paymentMethod: event.target.value as PaymentMethod,
-                      syncCardLimit: event.target.value === "credit_card" ? current.syncCardLimit : false,
+                      paymentMethod: val as PaymentMethod,
+                      syncCardLimit: val === "credit_card" ? current.syncCardLimit : false,
                     }))
                   }
-                  className="field"
-                >
-                  {Object.entries(paymentLabels).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
+                  options={Object.entries(paymentLabels).map(([value, label]) => ({ value, label }))}
+                />
               </FormField>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               <FormField label="Conta">
-                <select
+                <CustomSelect
                   value={draftFixedEntry.accountId}
-                  onChange={(event) =>
-                    setDraftFixedEntry((current) => ({ ...current, accountId: event.target.value }))
+                  onChange={(val) =>
+                    setDraftFixedEntry((current) => ({ ...current, accountId: val }))
                   }
-                  className="field"
-                >
-                  {accounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name}
-                    </option>
-                  ))}
-                </select>
+                  options={accounts.map((account) => ({ value: account.id, label: account.name, icon: Building2 }))}
+                />
               </FormField>
 
               {usesCard ? (
                 <>
                   <FormField label="Cartao">
-                    <select
+                    <CustomSelect
                       value={draftFixedEntry.cardId}
-                      onChange={(event) =>
-                        setDraftFixedEntry((current) => ({ ...current, cardId: event.target.value }))
+                      onChange={(val) =>
+                        setDraftFixedEntry((current) => ({ ...current, cardId: val }))
                       }
-                      className="field"
-                    >
-                      {cards.map((card) => (
-                        <option key={card.id} value={card.id}>
-                          {card.name}
-                        </option>
-                      ))}
-                    </select>
+                      options={cards.map((card) => ({ value: card.id, label: card.name, icon: CreditCard }))}
+                    />
                   </FormField>
                   <FormField label="Modalidade">
-                    <select
+                    <CustomSelect
                       value={draftFixedEntry.cardMode}
-                      onChange={(event) =>
+                      onChange={(val) =>
                         setDraftFixedEntry((current) => ({
                           ...current,
-                          cardMode: event.target.value as CardMode,
+                          cardMode: val as CardMode,
                           syncCardLimit:
-                            event.target.value === "credit" ? current.syncCardLimit : false,
+                            val === "credit" ? current.syncCardLimit : false,
                         }))
                       }
-                      className="field"
-                    >
-                      <option value="credit">Credito</option>
-                      <option value="debit">Debito</option>
-                    </select>
+                      options={[
+                        { value: "credit", label: "Credito" },
+                        { value: "debit", label: "Debito" },
+                      ]}
+                    />
                   </FormField>
                 </>
               ) : null}
@@ -8096,22 +8021,16 @@ export function FinanceApp() {
                 />
               </FormField>
               <FormField label="Prioridade opcional">
-                <select
+                <CustomSelect
                   value={draftPurchase.priority}
-                  onChange={(event) =>
+                  onChange={(val) =>
                     setDraftPurchase((current) => ({
                       ...current,
-                      priority: event.target.value as FinancePriority,
+                      priority: val as FinancePriority,
                     }))
                   }
-                  className="field"
-                >
-                  {planningPriorityOptions.map((priority) => (
-                    <option key={priority} value={priority}>
-                      {priority}
-                    </option>
-                  ))}
-                </select>
+                  options={planningPriorityOptions.map((priority) => ({ value: priority, label: priority }))}
+                />
               </FormField>
             </div>
 
@@ -8176,22 +8095,16 @@ export function FinanceApp() {
 
             <div className="grid gap-3 sm:grid-cols-2">
               <FormField label="Etapa do quadro">
-                <select
+                <CustomSelect
                   value={draftPurchase.boardColumn}
-                  onChange={(event) =>
+                  onChange={(val) =>
                     setDraftPurchase((current) => ({
                       ...current,
-                      boardColumn: event.target.value as Exclude<BoardColumn, "bought">,
+                      boardColumn: val as Exclude<BoardColumn, "bought">,
                     }))
                   }
-                  className="field"
-                >
-                  {planningBoardColumns.map((column) => (
-                    <option key={column.id} value={column.id}>
-                      {column.label}
-                    </option>
-                  ))}
-                </select>
+                  options={planningBoardColumns.map((column) => ({ value: column.id, label: column.label }))}
+                />
               </FormField>
               <FormField label="Data desejada">
                 <input
@@ -8207,11 +8120,11 @@ export function FinanceApp() {
 
             <div className="grid gap-3 sm:grid-cols-2">
               <FormField label="Modo do planejamento">
-                <select
+                <CustomSelect
                   value={draftPurchase.planningMode}
-                  onChange={(event) =>
+                  onChange={(val) =>
                     setDraftPurchase((current) => {
-                      const nextMode = event.target.value as DraftPurchase["planningMode"];
+                      const nextMode = val as DraftPurchase["planningMode"];
                       return {
                         ...current,
                         planningMode: nextMode,
@@ -8221,45 +8134,39 @@ export function FinanceApp() {
                       };
                     })
                   }
-                  className="field"
-                >
-                  <option value="save_over_time">Guardar dinheiro</option>
-                  <option value="buy_in_target_period">Comprar a vista</option>
-                  <option value="card_parcelado">Comprar no cartao</option>
-                </select>
+                  options={[
+                    { value: "save_over_time", label: "Guardar dinheiro" },
+                    { value: "buy_in_target_period", label: "Comprar a vista" },
+                    { value: "card_parcelado", label: "Comprar no cartao" },
+                  ]}
+                />
               </FormField>
               {draftPurchase.planningMode !== "card_parcelado" ? (
                 <FormField label={draftPurchase.planningMode === "save_over_time" ? "Onde guardar" : "Meio previsto"}>
-                  <select
+                  <CustomSelect
                     value={draftPurchase.paymentOption === "card" ? "pix" : draftPurchase.paymentOption}
-                    onChange={(event) =>
+                    onChange={(val) =>
                       setDraftPurchase((current) => ({
                         ...current,
-                        paymentOption: event.target.value as PaymentPlanMethod,
+                        paymentOption: val as PaymentPlanMethod,
                       }))
                     }
-                    className="field"
-                  >
-                    <option value="pix">Pix</option>
-                    <option value="cash">Dinheiro</option>
-                    <option value="bank_transfer">Transferencia</option>
-                  </select>
+                    options={[
+                      { value: "pix", label: "Pix" },
+                      { value: "cash", label: "Dinheiro" },
+                      { value: "bank_transfer", label: "Transferencia" },
+                    ]}
+                  />
                 </FormField>
               ) : (
                 <FormField label="Cartao planejado">
-                  <select
+                  <CustomSelect
                     value={draftPurchase.cardId}
-                    onChange={(event) =>
-                      setDraftPurchase((current) => ({ ...current, cardId: event.target.value }))
+                    onChange={(val) =>
+                      setDraftPurchase((current) => ({ ...current, cardId: val }))
                     }
-                    className="field"
-                  >
-                    {cards.map((card) => (
-                      <option key={card.id} value={card.id}>
-                        {card.name}
-                      </option>
-                    ))}
-                  </select>
+                    options={cards.map((card) => ({ value: card.id, label: card.name, icon: CreditCard }))}
+                  />
                 </FormField>
               )}
             </div>
@@ -8371,20 +8278,20 @@ export function FinanceApp() {
 
             <div className="grid gap-3 sm:grid-cols-2">
               <FormField label="Tipo">
-                <select
+                <CustomSelect
                   value={draftCategory.type}
-                  onChange={(event) =>
+                  onChange={(val) =>
                     setDraftCategory((current) => ({
                       ...current,
-                      type: event.target.value as "income" | "expense",
+                      type: val as "income" | "expense",
                       parentId: "",
                     }))
                   }
-                  className="field"
-                >
-                  <option value="expense">Despesa</option>
-                  <option value="income">Receita</option>
-                </select>
+                  options={[
+                    { value: "expense", label: "Despesa" },
+                    { value: "income", label: "Receita" },
+                  ]}
+                />
               </FormField>
               <FormField label="Cor">
                 <input
@@ -8399,21 +8306,19 @@ export function FinanceApp() {
             </div>
 
             <FormField label="Categoria principal">
-              <select
+              <CustomSelect
                 value={draftCategory.parentId}
-                onChange={(event) =>
+                onChange={(val) =>
                   setDraftCategory((current) => ({
                     ...current,
-                    parentId: event.target.value,
+                    parentId: val,
                     color:
-                      categories.find((category) => category.id === event.target.value)?.color ??
+                      categories.find((category) => category.id === val)?.color ??
                       current.color,
                   }))
                 }
-                className="field"
-              >
-                <option value="">Nenhuma, e uma categoria principal</option>
-                {categories
+                placeholder="Nenhuma, e uma categoria principal"
+                options={categories
                   .filter(
                     (category) =>
                       category.type === draftCategory.type &&
@@ -8421,12 +8326,8 @@ export function FinanceApp() {
                       category.id !== editingCategoryId &&
                       !isHiddenUiCategoryId(category.id),
                   )
-                  .map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {category.name}
-                    </option>
-                  ))}
-              </select>
+                  .map((category) => ({ value: category.id, label: category.name, icon: Tag }))}
+              />
             </FormField>
 
             <div className="flex flex-wrap justify-between gap-3">
@@ -8509,31 +8410,25 @@ export function FinanceApp() {
                 />
               </FormField>
               <FormField label="Banco">
-                <select
+                <CustomSelect
                   value={draftCard.issuer}
-                  onChange={(event) => handleIssuerChange(event.target.value)}
-                  className="field"
-                >
-                  {bankPresets.map((preset) => (
-                    <option key={preset.issuer} value={preset.issuer}>
-                      {preset.issuer}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => handleIssuerChange(val)}
+                  options={bankPresets.map((preset) => ({ value: preset.issuer, label: preset.issuer }))}
+                />
               </FormField>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-3">
               <FormField label="Bandeira">
-                <select
+                <CustomSelect
                   value={draftCard.brand}
-                  onChange={(event) => setDraftCard((current) => ({ ...current, brand: event.target.value }))}
-                  className="field"
-                >
-                  <option value="Mastercard">Mastercard</option>
-                  <option value="Visa">Visa</option>
-                  <option value="Elo">Elo</option>
-                </select>
+                  onChange={(val) => setDraftCard((current) => ({ ...current, brand: val }))}
+                  options={[
+                    { value: "Mastercard", label: "Mastercard" },
+                    { value: "Visa", label: "Visa" },
+                    { value: "Elo", label: "Elo" },
+                  ]}
+                />
               </FormField>
               <FormField label="Final do cartao">
                 <input
@@ -8556,28 +8451,22 @@ export function FinanceApp() {
 
             <div className="grid gap-3 sm:grid-cols-2">
               <FormField label="Modalidade">
-                <select
+                <CustomSelect
                   value={draftCard.availableMode}
-                  onChange={(event) => setDraftCard((current) => ({ ...current, availableMode: event.target.value as DraftCard["availableMode"] }))}
-                  className="field"
-                >
-                  <option value="both">Credito e debito</option>
-                  <option value="credit">Somente credito</option>
-                  <option value="debit">Somente debito</option>
-                </select>
+                  onChange={(val) => setDraftCard((current) => ({ ...current, availableMode: val as DraftCard["availableMode"] }))}
+                  options={[
+                    { value: "both", label: "Credito e debito" },
+                    { value: "credit", label: "Somente credito" },
+                    { value: "debit", label: "Somente debito" },
+                  ]}
+                />
               </FormField>
               <FormField label="Conta vinculada">
-                <select
+                <CustomSelect
                   value={draftCard.linkedAccountId}
-                  onChange={(event) => setDraftCard((current) => ({ ...current, linkedAccountId: event.target.value }))}
-                  className="field"
-                >
-                  {accounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setDraftCard((current) => ({ ...current, linkedAccountId: val }))}
+                  options={accounts.map((account) => ({ value: account.id, label: account.name, icon: Building2 }))}
+                />
               </FormField>
             </div>
 
@@ -8662,34 +8551,28 @@ export function FinanceApp() {
         <div className={`grid gap-3 ${showPriorityAndStatus ? "sm:grid-cols-2 xl:grid-cols-4" : "sm:grid-cols-2 xl:grid-cols-2"}`}>
           {showPriorityAndStatus ? (
             <FormField label="Prioridade">
-              <select
+              <CustomSelect
                 value={draftBill.priority}
-                onChange={(event) =>
-                  setDraftBill((current) => ({ ...current, priority: event.target.value as FinancePriority }))
+                onChange={(val) =>
+                  setDraftBill((current) => ({ ...current, priority: val as FinancePriority }))
                 }
-                className="field"
-              >
-                {planningPriorityOptions.map((priority) => (
-                  <option key={priority} value={priority}>
-                    {priority}
-                  </option>
-                ))}
-              </select>
+                options={planningPriorityOptions.map((priority) => ({ value: priority, label: priority }))}
+              />
             </FormField>
           ) : null}
           {showPriorityAndStatus ? (
             <FormField label="Status">
-              <select
+              <CustomSelect
                 value={draftBill.status}
-                onChange={(event) =>
-                  setDraftBill((current) => ({ ...current, status: event.target.value as DraftBill["status"] }))
+                onChange={(val) =>
+                  setDraftBill((current) => ({ ...current, status: val as DraftBill["status"] }))
                 }
-                className="field"
-              >
-                <option value="pending">Pendente</option>
-                <option value="paid">Paga</option>
-                <option value="overdue">Atrasada</option>
-              </select>
+                options={[
+                  { value: "pending", label: "Pendente" },
+                  { value: "paid", label: "Paga" },
+                  { value: "overdue", label: "Atrasada" },
+                ]}
+              />
             </FormField>
           ) : null}
           <FormField label="Recorrente">
@@ -8703,21 +8586,13 @@ export function FinanceApp() {
             </label>
           </FormField>
           <FormField label="Categoria">
-            <select
+            <CustomSelect
               value={draftBill.categoryId}
-              onChange={(event) => setDraftBill((current) => ({ ...current, categoryId: event.target.value }))}
-              className="field"
-            >
-              {selectableBillCategories.length > 0 ? (
-                selectableBillCategories.map((category) => (
-                  <option key={category.id} value={category.id}>
-                    {getCategoryOptionLabel(category)}
-                  </option>
-                ))
-              ) : (
-                <option value={draftBill.categoryId}>Sem categoria de despesa</option>
-              )}
-            </select>
+              onChange={(val) => setDraftBill((current) => ({ ...current, categoryId: val }))}
+              options={selectableBillCategories.length > 0
+                ? selectableBillCategories.map((category) => ({ value: category.id, label: getCategoryOptionLabel(category), icon: Tag }))
+                : [{ value: draftBill.categoryId, label: "Sem categoria de despesa", icon: Tag }]}
+            />
           </FormField>
         </div>
 
@@ -8743,46 +8618,34 @@ export function FinanceApp() {
           )}
 
           <FormField label="Como pagar">
-            <select
+            <CustomSelect
               value={draftBill.plannedPaymentMethod}
-              onChange={(event) => updateDraftBillPaymentMethod(event.target.value as PaymentPlanMethod)}
-              className="field"
-            >
-              <option value="pix">Pix</option>
-              <option value="cash">Dinheiro</option>
-              <option value="bank_transfer">Transferencia</option>
-              <option value="card">Cartao</option>
-            </select>
+              onChange={(val) => updateDraftBillPaymentMethod(val as PaymentPlanMethod)}
+              options={[
+                { value: "pix", label: "Pix" },
+                { value: "cash", label: "Dinheiro" },
+                { value: "bank_transfer", label: "Transferencia" },
+                { value: "card", label: "Cartao" },
+              ]}
+            />
           </FormField>
         </div>
 
         {usesCard ? (
           <div className={`grid gap-3 ${canShowInstallments ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
             <FormField label="Cartao">
-              <select
+              <CustomSelect
                 value={draftBill.plannedCardId}
-                onChange={(event) => updateDraftBillCardSelection(event.target.value)}
-                className="field"
-              >
-                {cards.map((card) => (
-                  <option key={card.id} value={card.id}>
-                    {card.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => updateDraftBillCardSelection(val)}
+                options={cards.map((card) => ({ value: card.id, label: card.name, icon: CreditCard }))}
+              />
             </FormField>
             <FormField label="Modalidade">
-              <select
+              <CustomSelect
                 value={draftBill.plannedCardMode}
-                onChange={(event) => updateDraftBillCardMode(event.target.value as CardMode)}
-                className="field"
-              >
-                {getDraftBillCardModes().map((mode) => (
-                  <option key={mode} value={mode}>
-                    {mode === "credit" ? "Credito" : "Debito"}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => updateDraftBillCardMode(val as CardMode)}
+                options={getDraftBillCardModes().map((mode) => ({ value: mode, label: mode === "credit" ? "Credito" : "Debito" }))}
+              />
             </FormField>
             {canShowInstallments ? (
               <FormField label="Parcelas">
@@ -8998,38 +8861,32 @@ export function FinanceApp() {
                 </div>
                 <div className="grid gap-3 sm:grid-cols-1">
                   <FormField label="Como pagar">
-                    <select
+                    <CustomSelect
                       value={draftDebt.plannedPaymentMethod}
-                      onChange={(event) =>
+                      onChange={(val) =>
                         setDraftDebt((current) => ({
                           ...current,
-                          plannedPaymentMethod: event.target.value as PaymentPlanMethod,
+                          plannedPaymentMethod: val as PaymentPlanMethod,
                         }))
                       }
-                      className="field"
-                    >
-                      <option value="pix">Pix</option>
-                      <option value="cash">Dinheiro</option>
-                      <option value="bank_transfer">Transferencia</option>
-                      <option value="card">Cartao</option>
-                    </select>
+                      options={[
+                        { value: "pix", label: "Pix" },
+                        { value: "cash", label: "Dinheiro" },
+                        { value: "bank_transfer", label: "Transferencia" },
+                        { value: "card", label: "Cartao" },
+                      ]}
+                    />
                   </FormField>
                 </div>
                 {draftDebt.plannedPaymentMethod === "card" ? (
                   <FormField label="Cartao planejado">
-                    <select
+                    <CustomSelect
                       value={draftDebt.plannedCardId}
-                      onChange={(event) =>
-                        setDraftDebt((current) => ({ ...current, plannedCardId: event.target.value }))
+                      onChange={(val) =>
+                        setDraftDebt((current) => ({ ...current, plannedCardId: val }))
                       }
-                      className="field"
-                    >
-                      {cards.map((card) => (
-                        <option key={card.id} value={card.id}>
-                          {card.name}
-                        </option>
-                      ))}
-                    </select>
+                      options={cards.map((card) => ({ value: card.id, label: card.name, icon: CreditCard }))}
+                    />
                   </FormField>
                 ) : null}
                   </>
@@ -9104,35 +8961,27 @@ export function FinanceApp() {
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
               <FormField label="Prioridade">
-                <select value={draftDebt.priority} onChange={(event) => setDraftDebt((current) => ({ ...current, priority: event.target.value as FinancePriority }))} className="field">
-                  {planningPriorityOptions.map((priority) => (
-                    <option key={priority} value={priority}>{priority}</option>
-                  ))}
-                </select>
+                <CustomSelect value={draftDebt.priority} onChange={(val) => setDraftDebt((current) => ({ ...current, priority: val as FinancePriority }))} options={planningPriorityOptions.map((priority) => ({ value: priority, label: priority }))} />
               </FormField>
               <FormField label="Status">
-                <select value={draftDebt.status} onChange={(event) => setDraftDebt((current) => ({ ...current, status: event.target.value as DraftDebt["status"] }))} className="field">
-                  <option value="active">Ativa</option>
-                  <option value="paused">Pausada</option>
-                  <option value="settled">Quitada</option>
-                </select>
+                <CustomSelect value={draftDebt.status} onChange={(val) => setDraftDebt((current) => ({ ...current, status: val as DraftDebt["status"] }))} options={[
+                  { value: "active", label: "Ativa" },
+                  { value: "paused", label: "Pausada" },
+                  { value: "settled", label: "Quitada" },
+                ]} />
               </FormField>
               <FormField label="Como pagar">
-                <select value={draftDebt.plannedPaymentMethod} onChange={(event) => setDraftDebt((current) => ({ ...current, plannedPaymentMethod: event.target.value as PaymentPlanMethod }))} className="field">
-                  <option value="pix">Pix</option>
-                  <option value="cash">Dinheiro</option>
-                  <option value="bank_transfer">Transferencia</option>
-                  <option value="card">Cartao</option>
-                </select>
+                <CustomSelect value={draftDebt.plannedPaymentMethod} onChange={(val) => setDraftDebt((current) => ({ ...current, plannedPaymentMethod: val as PaymentPlanMethod }))} options={[
+                  { value: "pix", label: "Pix" },
+                  { value: "cash", label: "Dinheiro" },
+                  { value: "bank_transfer", label: "Transferencia" },
+                  { value: "card", label: "Cartao" },
+                ]} />
               </FormField>
             </div>
             {draftDebt.plannedPaymentMethod === "card" ? (
               <FormField label="Cartao planejado">
-                <select value={draftDebt.plannedCardId} onChange={(event) => setDraftDebt((current) => ({ ...current, plannedCardId: event.target.value }))} className="field">
-                  {cards.map((card) => (
-                    <option key={card.id} value={card.id}>{card.name}</option>
-                  ))}
-                </select>
+                <CustomSelect value={draftDebt.plannedCardId} onChange={(val) => setDraftDebt((current) => ({ ...current, plannedCardId: val }))} options={cards.map((card) => ({ value: card.id, label: card.name, icon: CreditCard }))} />
               </FormField>
             ) : null}
             <div className="flex flex-wrap justify-between gap-3">
@@ -11347,39 +11196,33 @@ export function FinanceApp() {
                     }
                   />
                   <FormField label="Conta padrao">
-                    <select
+                    <CustomSelect
                       value={settings.defaultAccountId}
-                      onChange={(event) =>
+                      onChange={(val) =>
                         setSettings((current) => ({
                           ...current,
-                          defaultAccountId: event.target.value,
+                          defaultAccountId: val,
                         }))
                       }
-                      className="field"
-                    >
-                      {accounts.map((account) => (
-                        <option key={account.id} value={account.id}>
-                          {account.name}
-                        </option>
-                      ))}
-                    </select>
+                      options={accounts.map((account) => ({ value: account.id, label: account.name, icon: Building2 }))}
+                    />
                   </FormField>
                   <FormField label="Metodo de pagamento padrao da fatura">
-                    <select
+                    <CustomSelect
                       value={settings.defaultBillPaymentMethod}
-                      onChange={(event) =>
+                      onChange={(val) =>
                         setSettings((current) => ({
                           ...current,
-                          defaultBillPaymentMethod: event.target.value as PaymentPlanMethod,
+                          defaultBillPaymentMethod: val as PaymentPlanMethod,
                         }))
                       }
-                      className="field"
-                    >
-                      <option value="pix">PIX</option>
-                      <option value="bank_transfer">Transferencia bancaria</option>
-                      <option value="cash">Dinheiro</option>
-                      <option value="card">Cartao</option>
-                    </select>
+                      options={[
+                        { value: "pix", label: "PIX" },
+                        { value: "bank_transfer", label: "Transferencia bancaria" },
+                        { value: "cash", label: "Dinheiro" },
+                        { value: "card", label: "Cartao" },
+                      ]}
+                    />
                   </FormField>
                 </div>
 
@@ -11521,18 +11364,18 @@ export function FinanceApp() {
                     />
                   </FormField>
                   <FormField label="Bandeira padrao">
-                    <select
+                    <CustomSelect
                       value={draftBankPreset.brand}
-                      onChange={(event) =>
-                        setDraftBankPreset((current) => ({ ...current, brand: event.target.value }))
+                      onChange={(val) =>
+                        setDraftBankPreset((current) => ({ ...current, brand: val }))
                       }
-                      className="field"
-                    >
-                      <option value="Mastercard">Mastercard</option>
-                      <option value="Visa">Visa</option>
-                      <option value="Elo">Elo</option>
-                      <option value="American Express">American Express</option>
-                    </select>
+                      options={[
+                        { value: "Mastercard", label: "Mastercard" },
+                        { value: "Visa", label: "Visa" },
+                        { value: "Elo", label: "Elo" },
+                        { value: "American Express", label: "American Express" },
+                      ]}
+                    />
                   </FormField>
                   <FormField label="Cor">
                     <input

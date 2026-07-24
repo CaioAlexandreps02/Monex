@@ -3,7 +3,149 @@ import { navItems } from "@/lib/mock-data";
 import type { FinancePriority, ViewId } from "@/types/finance";
 
 import Image from "next/image";
-import type { LucideIcon } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Check, ChevronDown, type LucideIcon } from "lucide-react";
+
+export type CustomSelectOption = {
+  value: string;
+  label: string;
+  icon?: LucideIcon;
+};
+
+export function CustomSelect({
+  options,
+  value,
+  onChange,
+  placeholder = "Selecione...",
+  className = "",
+  id,
+}: {
+  options: CustomSelectOption[];
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  className?: string;
+  id?: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+
+  const selected = options.find((opt) => opt.value === value);
+
+  const close = useCallback(() => {
+    setIsOpen(false);
+    setHighlightedIndex(-1);
+  }, []);
+
+  useEffect(() => {
+    function handleMouseDown(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        close();
+      }
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") close();
+    }
+    document.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [close]);
+
+  useEffect(() => {
+    if (isOpen && highlightedIndex >= 0 && listRef.current) {
+      const items = listRef.current.children;
+      if (items[highlightedIndex]) {
+        (items[highlightedIndex] as HTMLElement).scrollIntoView({ block: "nearest" });
+      }
+    }
+  }, [isOpen, highlightedIndex]);
+
+  function handleButtonKeyDown(event: React.KeyboardEvent) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!isOpen) {
+        setIsOpen(true);
+        setHighlightedIndex(event.key === "ArrowDown" ? 0 : options.length - 1);
+      } else {
+        setHighlightedIndex((prev) => {
+          if (event.key === "ArrowDown") return Math.min(prev + 1, options.length - 1);
+          return Math.max(prev - 1, 0);
+        });
+      }
+    } else if (event.key === "Enter" && isOpen && highlightedIndex >= 0) {
+      event.preventDefault();
+      onChange(options[highlightedIndex].value);
+      close();
+    } else if (event.key === "Escape") {
+      close();
+    }
+  }
+
+  function handleOptionClick(optValue: string) {
+    onChange(optValue);
+    close();
+  }
+
+  return (
+    <div ref={containerRef} className={`relative ${className}`}>
+      <button
+        type="button"
+        id={id}
+        onClick={() => setIsOpen((prev) => !prev)}
+        onKeyDown={handleButtonKeyDown}
+        className={`field flex w-full items-center justify-between gap-2 text-left ${
+          !selected ? "text-slate-400" : ""
+        }`}
+      >
+        <span className="flex items-center gap-2 truncate">
+          {selected?.icon && <selected.icon className="h-4 w-4 shrink-0 text-slate-400" />}
+          {selected?.label ?? placeholder}
+        </span>
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 text-slate-400 transition-transform duration-150 ${
+            isOpen ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+
+      {isOpen ? (
+        <ul
+          ref={listRef}
+          className="absolute z-50 mt-1 max-h-[200px] w-full overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-lg transition-all duration-150 ease-out"
+          style={{ scrollBehavior: "smooth" }}
+        >
+          {options.map((opt, index) => {
+            const isSelected = opt.value === value;
+            const isHighlighted = index === highlightedIndex;
+            return (
+              <li key={opt.value}>
+                <button
+                  type="button"
+                  onClick={() => handleOptionClick(opt.value)}
+                  onMouseEnter={() => setHighlightedIndex(index)}
+                  className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm transition ${
+                    isHighlighted ? "bg-sky-50" : ""
+                  } ${isSelected ? "bg-sky-100 font-semibold text-slate-900" : "text-slate-700"}`}
+                >
+                  <span className="flex items-center gap-2 truncate">
+                    {opt.icon && <opt.icon className="h-4 w-4 shrink-0 text-slate-400" />}
+                    {opt.label}
+                  </span>
+                  {isSelected ? <Check className="h-4 w-4 shrink-0 text-sky-600" /> : null}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
 
 const priorityClasses: Record<string, string> = {
   "Urgente": "bg-red-50 text-red-600 ring-red-200",
