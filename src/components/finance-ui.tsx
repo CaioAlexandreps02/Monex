@@ -83,6 +83,8 @@ export function CustomSelect({
       close();
     } else if (event.key === "Escape") {
       close();
+    } else if (event.key === "Tab") {
+      close();
     }
   }
 
@@ -113,36 +115,38 @@ export function CustomSelect({
         />
       </button>
 
-      {isOpen ? (
-        <ul
-          ref={listRef}
-          className="absolute z-50 mt-1 max-h-[200px] w-full overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-lg transition-all duration-150 ease-out"
-          style={{ scrollBehavior: "smooth" }}
-        >
-          {options.map((opt, index) => {
-            const isSelected = opt.value === value;
-            const isHighlighted = index === highlightedIndex;
-            return (
-              <li key={opt.value}>
-                <button
-                  type="button"
-                  onClick={() => handleOptionClick(opt.value)}
-                  onMouseEnter={() => setHighlightedIndex(index)}
-                  className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm transition ${
-                    isHighlighted ? "bg-sky-50" : ""
-                  } ${isSelected ? "bg-sky-100 font-semibold text-slate-900" : "text-slate-700"}`}
-                >
-                  <span className="flex items-center gap-2 truncate">
-                    {opt.icon && <opt.icon className="h-4 w-4 shrink-0 text-slate-400" />}
-                    {opt.label}
-                  </span>
-                  {isSelected ? <Check className="h-4 w-4 shrink-0 text-sky-600" /> : null}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      ) : null}
+      <ul
+        ref={listRef}
+        className={`absolute z-50 mt-1 max-h-[200px] w-full overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-lg transition-all duration-150 ease-out ${
+          isOpen
+            ? "opacity-100 scale-100 pointer-events-auto"
+            : "opacity-0 scale-95 pointer-events-none"
+        }`}
+        style={{ scrollBehavior: "smooth" }}
+      >
+        {options.map((opt, index) => {
+          const isSelected = opt.value === value;
+          const isHighlighted = index === highlightedIndex;
+          return (
+            <li key={opt.value}>
+              <button
+                type="button"
+                onClick={() => handleOptionClick(opt.value)}
+                onMouseEnter={() => setHighlightedIndex(index)}
+                className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm transition ${
+                  isHighlighted ? "bg-sky-50" : ""
+                } ${isSelected ? "bg-sky-100 font-semibold text-slate-900" : "text-slate-700"}`}
+              >
+                <span className="flex items-center gap-2 truncate">
+                  {opt.icon && <opt.icon className="h-4 w-4 shrink-0 text-slate-400" />}
+                  {opt.label}
+                </span>
+                {isSelected ? <Check className="h-4 w-4 shrink-0 text-sky-600" /> : null}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
