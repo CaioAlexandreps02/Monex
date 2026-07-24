@@ -6187,7 +6187,7 @@ export function FinanceApp() {
                 {fixedSections.map(({ section, rows }) => {
                   const sectionTotal = rows.reduce(
                     (sum, row) =>
-                      sum + Object.values(row.amountByMonth).reduce((rowSum, value) => rowSum + value, 0),
+                      sum + salaryCalendarMonths.reduce((rowSum, monthItem) => rowSum + (row.amountByMonth[monthItem.monthValue] ?? 0), 0),
                     0,
                   );
                   const sectionCurrentMonthTotal = rows.reduce(
@@ -6495,7 +6495,7 @@ export function FinanceApp() {
                                   <td className="border border-slate-200 bg-white px-2 py-2.5 text-right">
                                     <p className="text-[11px] font-semibold text-slate-900">
                                       {formatCurrency(
-                                        Object.values(row.amountByMonth).reduce((sum, value) => sum + value, 0),
+                                        salaryCalendarMonths.reduce((sum, monthItem) => sum + (row.amountByMonth[monthItem.monthValue] ?? 0), 0),
                                       )}
                                     </p>
                                   </td>
