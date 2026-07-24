@@ -868,6 +868,7 @@ export const settings: Settings = {
   defaultCardId: "card-nubank",
   weekStartDay: 1,
   extraIncomeGoal: 800,
+  defaultBillPaymentMethod: "pix",
 };
 
 export const monthlyPlansByMonth: Record<string, MonthlyPlan> = {

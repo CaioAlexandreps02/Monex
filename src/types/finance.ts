@@ -96,7 +96,8 @@ export interface Transaction {
     | "debt_payment"
     | "planned_purchase"
     | "investment"
-    | "basic_bill";
+    | "basic_bill"
+    | "adjustment";
   cardId?: string;
   cardMode?: CardMode;
   installmentGroupId?: string;
@@ -208,6 +209,7 @@ export interface Settings {
   defaultCardId: string;
   weekStartDay: number;
   extraIncomeGoal: number;
+  defaultBillPaymentMethod: PaymentPlanMethod;
 }
 
 export interface BudgetCategory {

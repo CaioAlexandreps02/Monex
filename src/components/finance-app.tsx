@@ -533,7 +533,7 @@ function getSuggestedCardStatementMonth(card: Card | undefined, baseDateValue?: 
     : safeBaseDate;
   const statementDate = new Date(baseDate);
 
-  if (baseDate.getDate() > card.closingDay) {
+  if (baseDate.getDate() >= card.closingDay) {
     statementDate.setMonth(statementDate.getMonth() + 1);
   }
 
@@ -1342,7 +1342,7 @@ export function FinanceApp() {
               priority: "Alta",
               isRecurring: true,
               status,
-              plannedPaymentMethod: "pix",
+              plannedPaymentMethod: settings.defaultBillPaymentMethod,
               notes: `Gerada automaticamente a partir dos lancamentos de credito de ${formatMonthLabel(
                 monthValueToDate(statementMonth),
               )}.`,
@@ -1464,7 +1464,7 @@ export function FinanceApp() {
       return { committed: 0, available: 0, limit: 0 };
     }
 
-    const committed = getOpenCardStatementTotal(cardId, fromMonthValue, sourceTransactions, 12);
+    const committed = getOpenCardStatementTotal(cardId, fromMonthValue, sourceTransactions, 18);
     return {
       committed,
       available: Number((card.creditLimit - committed).toFixed(2)),
@@ -3346,7 +3346,7 @@ export function FinanceApp() {
       categoryName: "Fatura do cartao",
       paymentMethod: "credit_card",
       status: "paid",
-      expenseKind: "variable",
+      expenseKind: "adjustment",
       accountId: selectedCardDetail.linkedAccountId ?? settings.defaultAccountId,
       cardId: selectedCardDetail.id,
       cardMode: "credit",
@@ -6934,8 +6934,8 @@ export function FinanceApp() {
                           </option>
                         ))}
                       </select>
-                    </FormField>
-                  </div>
+                  </FormField>
+                </div>
                 ) : null}
 
                 {draftTransaction.type === "expense" &&
@@ -11271,6 +11271,23 @@ export function FinanceApp() {
                           {account.name}
                         </option>
                       ))}
+                    </select>
+                  </FormField>
+                  <FormField label="Metodo de pagamento padrao da fatura">
+                    <select
+                      value={settings.defaultBillPaymentMethod}
+                      onChange={(event) =>
+                        setSettings((current) => ({
+                          ...current,
+                          defaultBillPaymentMethod: event.target.value as PaymentPlanMethod,
+                        }))
+                      }
+                      className="field"
+                    >
+                      <option value="pix">PIX</option>
+                      <option value="bank_transfer">Transferencia bancaria</option>
+                      <option value="cash">Dinheiro</option>
+                      <option value="card">Cartao</option>
                     </select>
                   </FormField>
                 </div>
