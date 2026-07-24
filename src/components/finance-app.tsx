@@ -640,9 +640,29 @@ function buildYearMonths(year: number) {
   });
 }
 
-function createFixedEntryAmountDraft(year: number, entry?: FixedFlowEntry) {
+function buildRelativeMonths(referenceDate: Date) {
+  const months: { monthValue: string; label: string; fullLabel: string }[] = [];
+
+  for (let offset = -1; offset <= 6; offset++) {
+    const date = new Date(referenceDate);
+    date.setMonth(date.getMonth() + offset);
+
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1;
+
+    months.push({
+      monthValue: `${year}-${String(month).padStart(2, "0")}`,
+      label: shortMonthFormatter.format(date).replace(".", "").toUpperCase(),
+      fullLabel: formatMonthLabel(date),
+    });
+  }
+
+  return months;
+}
+
+function createFixedEntryAmountDraft(referenceDate: Date, entry?: FixedFlowEntry) {
   return Object.fromEntries(
-    buildYearMonths(year).map((monthItem) => [
+    buildRelativeMonths(referenceDate).map((monthItem) => [
       monthItem.monthValue,
       String(entry?.amountByMonth[monthItem.monthValue] ?? ""),
     ]),
@@ -843,7 +863,7 @@ export function FinanceApp() {
   const [draftAccount, setDraftAccount] = useState(initialDraftAccount);
   const [draftFixedEntry, setDraftFixedEntry] = useState<DraftFixedEntry>(() => ({
     ...initialDraftFixedEntry,
-    amountByMonth: createFixedEntryAmountDraft(monthValueToDate(initialMonth).getFullYear()),
+    amountByMonth: createFixedEntryAmountDraft(monthValueToDate(initialMonth)),
   }));
   const [draftInvestment, setDraftInvestment] = useState(initialDraftInvestment);
   const [draftInvestmentContribution, setDraftInvestmentContribution] = useState(
@@ -1667,7 +1687,7 @@ export function FinanceApp() {
     color: ["#1d63cf", "#58a6ff", "#ff8a65", "#22c55e", "#7c3aed"][index % 5],
   }));
 
-  const salaryCalendarMonths = buildYearMonths(referenceMonthDate.getFullYear());
+  const salaryCalendarMonths = buildRelativeMonths(referenceMonthDate);
   const monthlyGridRows = createMonthlyGridRows();
   const fixedMonthEntries = monthlyGridRows.filter((entry) => (entry.amountByMonth[selectedMonth] ?? 0) > 0);
   const fixedMonthCompletedCount = fixedMonthEntries.filter((entry) =>
@@ -3900,7 +3920,7 @@ export function FinanceApp() {
   }
 
   function getPlannedPurchaseAmountByMonth(purchase: PlannedPurchase) {
-    const yearMonths = buildYearMonths(referenceMonthDate.getFullYear()).map((monthItem) => monthItem.monthValue);
+    const yearMonths = salaryCalendarMonths.map((monthItem) => monthItem.monthValue);
     const targetMonth =
       purchase.targetMonth ?? purchase.desiredDate?.slice(0, 7) ?? selectedMonth;
     const nextAmounts = Object.fromEntries(yearMonths.map((monthValue) => [monthValue, 0])) as Record<string, number>;
@@ -4251,7 +4271,7 @@ export function FinanceApp() {
       cardMode: entry?.cardMode ?? "credit",
       syncCardLimit: entry?.syncCardLimit ?? false,
       notes: entry?.notes ?? "",
-      amountByMonth: createFixedEntryAmountDraft(referenceMonthDate.getFullYear(), entry),
+      amountByMonth: createFixedEntryAmountDraft(referenceMonthDate, entry),
     };
   }
 
@@ -4266,7 +4286,7 @@ export function FinanceApp() {
     setDraftFixedEntry({
       ...initialDraftFixedEntry,
       cardId: settings.defaultCardId,
-      amountByMonth: createFixedEntryAmountDraft(referenceMonthDate.getFullYear()),
+      amountByMonth: createFixedEntryAmountDraft(referenceMonthDate),
     });
     setIsFixedEntryModalOpen(false);
   }
@@ -6103,7 +6123,7 @@ export function FinanceApp() {
                         {fixedMonthlyComparison.map((monthItem) => (
                           <th
                             key={monthItem.monthValue}
-                            className={`min-w-[58px] border border-white/10 px-2 py-2 text-center text-[10px] uppercase tracking-[0.16em] text-white ${
+                            className={`min-w-[72px] border border-white/10 px-2 py-2 text-center text-[10px] uppercase tracking-[0.16em] text-white ${
                               monthItem.monthValue === selectedMonth ? "bg-sky-200 text-sky-950" : "bg-white/8"
                             }`}
                           >
@@ -6238,7 +6258,7 @@ export function FinanceApp() {
                                 {salaryCalendarMonths.map((monthItem) => (
                                   <th
                                     key={monthItem.monthValue}
-                                    className={`min-w-[48px] border border-slate-200 bg-slate-900 px-1 py-2.5 text-center text-[10px] uppercase tracking-[0.16em] text-white ${
+                                    className={`min-w-[64px] border border-slate-200 bg-slate-900 px-1 py-2.5 text-center text-[10px] uppercase tracking-[0.16em] text-white ${
                                       monthItem.monthValue === selectedMonth ? "bg-sky-200 text-sky-950 ring-2 ring-sky-300" : ""
                                     }`}
                                   >
