@@ -1064,7 +1064,11 @@ export function FinanceApp() {
     if (persisted.fixedEntries) setFixedEntries(persisted.fixedEntries);
     if (persisted.plannedPurchases) setPlannedPurchases(persisted.plannedPurchases);
     if (persisted.investments) setInvestments(persisted.investments);
-    if (persisted.settings) setSettings(persisted.settings);
+    if (persisted.settings) setSettings({
+      ...seedSettings,
+      ...persisted.settings,
+      defaultBillPaymentMethod: (persisted.settings as any).defaultBillPaymentMethod ?? seedSettings.defaultBillPaymentMethod,
+    });
     if (persisted.monthlyPlansByMonth) setMonthlyPlansByMonth(persisted.monthlyPlansByMonth);
   }, []);
 
