@@ -10013,9 +10013,12 @@ export function FinanceApp() {
                             {getDisplayCategoryName(transaction.categoryId, transaction.categoryName)} - {formatShortDate(transaction.date)}
                           </p>
                           {transaction.installmentTotal ? (
-                            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">
+                            <span
+                              title="Cada parcela entra na fatura do mes correspondente, nao no mes da compra."
+                              className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-semibold text-sky-700"
+                            >
                               Parcela {transaction.installmentNumber}/{transaction.installmentTotal}
-                            </p>
+                            </span>
                           ) : null}
                         </div>
                         <div className="text-right">
@@ -10060,24 +10063,35 @@ export function FinanceApp() {
               >
                 <div className="space-y-3">
                   {selectedCardStatementInstallments.length ? (
-                    selectedCardStatementInstallments.map((transaction) => (
-                      <div
-                        key={`${transaction.id}-installment`}
-                        className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-slate-900">{transaction.title}</p>
-                            <p className="mt-1 text-sm text-slate-500">
-                              Parcela {transaction.installmentNumber}/{transaction.installmentTotal}
+                    <>
+                      <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.15em] text-sky-700">
+                          Compromisso de parcelas: {formatCurrency(selectedCardStatementInstallments.reduce((sum, t) => sum + t.amount, 0))}
+                          {" "}({selectedCardStatementInstallments.length} {selectedCardStatementInstallments.length === 1 ? "parcela" : "parcelas"} neste mes)
+                        </p>
+                        <p className="mt-1 text-xs text-sky-500">
+                          Cada parcela entra na fatura do mes correspondente, nao no mes da compra.
+                        </p>
+                      </div>
+                      {selectedCardStatementInstallments.map((transaction) => (
+                        <div
+                          key={`${transaction.id}-installment`}
+                          className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">{transaction.title}</p>
+                              <p className="mt-1 text-sm text-slate-500">
+                                Parcela {transaction.installmentNumber}/{transaction.installmentTotal}
+                              </p>
+                            </div>
+                            <p className="text-sm font-semibold text-slate-900">
+                              {formatCurrency(transaction.amount)}
                             </p>
                           </div>
-                          <p className="text-sm font-semibold text-slate-900">
-                            {formatCurrency(transaction.amount)}
-                          </p>
                         </div>
-                      </div>
-                    ))
+                      ))}
+                    </>
                   ) : (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-600">
                       Nenhuma parcela ativa nesse mes da fatura.
