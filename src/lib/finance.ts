@@ -360,7 +360,11 @@ export function getCardSummaries(cards: Card[], transactions: Transaction[], ref
     const cardTransactions = monthTransactions.filter((transaction) => transaction.cardId === card.id);
     const creditUsed = cardTransactions
       .filter((transaction) => transaction.cardMode === "credit")
-      .reduce((total, transaction) => total + transaction.amount, 0);
+      .reduce(
+        (total, transaction) =>
+          total + (transaction.type === "income" ? -transaction.amount : transaction.amount),
+        0,
+      );
     const debitUsed = cardTransactions
       .filter((transaction) => transaction.cardMode === "debit")
       .reduce((total, transaction) => total + transaction.amount, 0);

@@ -293,3 +293,65 @@ export interface MonthlyGridRow {
   amountByMonth: Record<string, number>;
   completedMonths: string[];
 }
+
+export interface CardBillEstimate {
+  cardId: string;
+  monthValue: string;
+  estimatedAmount: number;
+  isAutoEstimate: boolean;
+  status: "pending" | "paid";
+  paidTransactionId?: string;
+}
+
+export interface ImportedStatementMatch {
+  kind:
+    | "existing_transaction"
+    | "planned_purchase"
+    | "fixed_entry"
+    | "bill"
+    | "card_bill_payment";
+  targetId: string;
+  confidence: number;
+  reason: string;
+}
+
+export interface ImportedStatementBatch {
+  id: string;
+  fileName: string;
+  fileType: "csv" | "ofx";
+  sourceKind: "bank_account" | "credit_card" | "unknown";
+  sourceInstitution?: string;
+  accountId?: string;
+  cardId?: string;
+  importedAt: string;
+  periodStart?: string;
+  periodEnd?: string;
+  status: "pending_review" | "partially_confirmed" | "confirmed" | "archived";
+  itemCount: number;
+  confirmedCount: number;
+  ignoredCount: number;
+  duplicateCount: number;
+}
+
+export interface ImportedStatementItem {
+  id: string;
+  batchId: string;
+  rawDescription: string;
+  normalizedDescription: string;
+  date: string;
+  amount: number;
+  direction: "inflow" | "outflow";
+  sourceKind: "bank_account" | "credit_card" | "unknown";
+  paymentMethod: PaymentMethod | "unknown";
+  accountId?: string;
+  cardId?: string;
+  suggestedCategoryId?: string;
+  suggestedTransactionType?: TransactionType;
+  suggestedMatch?: ImportedStatementMatch;
+  statementMonth?: string;
+  confidence: number;
+  status: "pending" | "confirmed" | "ignored" | "duplicate";
+  confirmedTransactionId?: string;
+  ignoredReason?: string;
+  fingerprint: string;
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import {
@@ -44,13 +44,16 @@ import type {
   Bill,
   BoardColumn,
   Card,
+  CardBillEstimate,
   CardMode,
     Category,
     Debt,
-    FinancePriority,
-    FixedFlowEntry,
-    FixedFlowSection,
-    Investment,
+  FinancePriority,
+  FixedFlowEntry,
+  FixedFlowSection,
+  ImportedStatementBatch,
+  ImportedStatementItem,
+  Investment,
     MonthlyGridRow,
     MonthlyPlan,
     Settings,
@@ -95,13 +98,9 @@ import {
   TrendingUp,
   TrendingDown,
   DollarSign,
-  PiggyBank,
-  Search,
-  Filter,
-  ChevronDown,
   Calendar,
   CheckCircle2,
-  Info,
+  Check,
 } from "lucide-react";
 
 type DraftTransaction = {
@@ -132,7 +131,7 @@ type PlanningBoardView = "default" | "weeks" | "months";
 type ReportsSection = "cashflow" | "categories" | "payment-methods" | "monthly-trend" | "exports";
 type SettingsSection = "main" | "salary" | "categories" | "banks" | "accounts" | "security";
 type AccountsSection = "overview" | "normal" | "recurring" | "debts";
-type HomeTab = "grid" | "planning" | "accounts" | "cards";
+type HomeTab = "grid" | "planning" | "accounts" | "cards" | "imports";
 type AccountEntryKind = "bill" | "debt";
 type BillDisplayItem =
   | { source: "manual"; bill: Bill }
@@ -168,6 +167,17 @@ type DraftSalaryMonth = {
   fixedIncomePlanned: string;
 };
 
+type InlineNewEntry = {
+  section: Extract<FixedFlowSection, "Ganhos" | "Contas">;
+  title: string;
+  amountByMonth: Record<string, string>;
+};
+
+type PurchaseModalOptions = {
+  planningMode?: DraftPurchase["planningMode"];
+  paymentOption?: DraftPurchase["paymentOption"];
+};
+
 const viewPathMap: Record<ViewId, string> = {
   home: "/",
   transactions: "/transacoes",
@@ -176,7 +186,7 @@ const viewPathMap: Record<ViewId, string> = {
 };
 
 function isHomeTab(value: string | null): value is HomeTab {
-  return value === "grid" || value === "planning" || value === "accounts" || value === "cards";
+  return value === "grid" || value === "planning" || value === "accounts" || value === "cards" || value === "imports";
 }
 
 function isPlanningScreen(value: string | null): value is Exclude<PlanningScreen, "board"> {
@@ -391,6 +401,9 @@ type FinancePersistedState = {
   fixedEntries: FixedFlowEntry[];
   plannedPurchases: PlannedPurchase[];
   investments: Investment[];
+  cardBillEstimates: Record<string, CardBillEstimate>;
+  importedStatementBatches: ImportedStatementBatch[];
+  importedStatementItems: ImportedStatementItem[];
   settings: Settings;
   monthlyPlansByMonth: Record<string, MonthlyPlan>;
 };
@@ -519,8 +532,8 @@ function normalizeFixedSection(section: FixedFlowSection): FixedFlowSection {
     return "Contas";
   }
 
-  if (section === "Compras planejadas") {
-    return "Planejamento";
+  if (section === "Compras planejadas" || section === "Planejamento") {
+    return "Contas";
   }
 
   return section;
@@ -630,40 +643,156 @@ const planningPriorityOptions: FinancePriority[] = [
 const fixedSectionOrder: FixedFlowSection[] = [
   "Ganhos",
   "Contas",
-  "Planejamento",
 ];
 
 const fixedSectionStyles: Record<FixedFlowSection, string> = {
   Ganhos: "border-emerald-200 bg-emerald-50/80",
   Contas: "border-rose-200 bg-rose-50/80",
-  Planejamento: "border-violet-200 bg-violet-50/80",
+  Planejamento: "border-rose-200 bg-rose-50/80",
   "Gastos fixos": "border-rose-200 bg-rose-50/80",
-  "Dividas e repasses": "border-amber-200 bg-amber-50/80",
-  "Compras planejadas": "border-violet-200 bg-violet-50/80",
+  "Dividas e repasses": "border-rose-200 bg-rose-50/80",
+  "Compras planejadas": "border-rose-200 bg-rose-50/80",
 };
 
 const fixedSectionDisplayLabels: Record<FixedFlowSection, string> = {
   Ganhos: "Ganhos",
   Contas: "Contas",
-  Planejamento: "Compras planejadas",
+  Planejamento: "Contas",
   "Gastos fixos": "Contas fixas",
-  "Dividas e repasses": "Dividas e repasses",
+  "Dividas e repasses": "Dividas",
   "Compras planejadas": "Compras planejadas",
 };
 
-const shortMonthFormatter = new Intl.DateTimeFormat("pt-BR", { month: "short" });
+type ContasSubType = "Contas fixas" | "Dividas" | "Compras planejadas" | "Faturas";
 
-function buildYearMonths(year: number) {
-  return Array.from({ length: 12 }, (_, index) => {
-    const date = new Date(`${year}-${String(index + 1).padStart(2, "0")}-01T12:00:00`);
+const contasSubTypeOrder: ContasSubType[] = [
+  "Contas fixas",
+  "Dividas",
+  "Compras planejadas",
+  "Faturas",
+];
 
-    return {
-      monthValue: `${year}-${String(index + 1).padStart(2, "0")}`,
-      label: shortMonthFormatter.format(date).replace(".", "").toUpperCase(),
-      fullLabel: formatMonthLabel(date),
-    };
-  });
+function getContasSubType(row: MonthlyGridRow): ContasSubType {
+  if (row.sourceType === "card_auto_bill") {
+    return "Faturas";
+  }
+
+  if (row.sourceType === "planned_purchase") {
+    return "Compras planejadas";
+  }
+
+  if (row.linkedDebtId) {
+    return "Dividas";
+  }
+
+  return "Contas fixas";
 }
+
+function normalizeImportedDescription(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+}
+
+function splitCsvLine(line: string) {
+  const result: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (const char of line) {
+    if (char === "\"") {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if ((char === "," || char === ";") && !inQuotes) {
+      result.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  result.push(current.trim());
+  return result;
+}
+
+function parseImportDate(value: string) {
+  const trimmed = value.trim();
+  const isoMatch = trimmed.match(/(\d{4})[-/](\d{2})[-/](\d{2})/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  }
+
+  const brMatch = trimmed.match(/(\d{2})[/-](\d{2})[/-](\d{4})/);
+  if (brMatch) {
+    return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
+  }
+
+  const ofxMatch = trimmed.match(/(\d{4})(\d{2})(\d{2})/);
+  if (ofxMatch) {
+    return `${ofxMatch[1]}-${ofxMatch[2]}-${ofxMatch[3]}`;
+  }
+
+  return "";
+}
+
+function parseImportAmount(value: string) {
+  const cleaned = value
+    .replace(/[^\d,.-]/g, "")
+    .replace(/\.(?=\d{3}(?:\D|$))/g, "")
+    .replace(",", ".");
+  return Number(cleaned) || 0;
+}
+
+function detectImportPaymentMethod(description: string, sourceKind: ImportedStatementBatch["sourceKind"]): ImportedStatementItem["paymentMethod"] {
+  if (sourceKind === "credit_card") {
+    return "credit_card";
+  }
+
+  if (description.includes("PIX")) {
+    return "pix";
+  }
+
+  if (description.includes("DEBIT") || description.includes("DEBITO")) {
+    return "debit_card";
+  }
+
+  if (description.includes("BOLETO")) {
+    return "bank_transfer";
+  }
+
+  return "unknown";
+}
+
+function isCreditCardStatementCredit(description: string) {
+  return (
+    description.includes("ESTORNO") ||
+    description.includes("DEVOLUCAO") ||
+    description.includes("DEVOLUÇÃO") ||
+    description.includes("CREDITO") ||
+    description.includes("CRÉDITO") ||
+    description.includes("PAGAMENTO")
+  );
+}
+
+function getCreditCardTransactionSignedAmount(transaction: Transaction) {
+  if (transaction.type === "income") {
+    return -transaction.amount;
+  }
+
+  return transaction.amount;
+}
+
+function buildImportFingerprint(date: string, amount: number, normalizedDescription: string, sourceId: string) {
+  return [date, amount.toFixed(2), normalizedDescription, sourceId].join(":");
+}
+
+const shortMonthFormatter = new Intl.DateTimeFormat("pt-BR", { month: "short" });
 
 function buildRelativeMonths(referenceDate: Date) {
   const months: { monthValue: string; label: string; fullLabel: string }[] = [];
@@ -929,6 +1058,18 @@ export function FinanceApp() {
     rowId: string;
     monthValue: string;
   } | null>(null);
+  const [inlineNewEntry, setInlineNewEntry] = useState<InlineNewEntry | null>(null);
+  const [cardBillEstimates, setCardBillEstimates] = useState<Record<string, CardBillEstimate>>({});
+  const [importedStatementBatches, setImportedStatementBatches] = useState<ImportedStatementBatch[]>([]);
+  const [importedStatementItems, setImportedStatementItems] = useState<ImportedStatementItem[]>([]);
+  const [importSourceKind, setImportSourceKind] = useState<ImportedStatementBatch["sourceKind"]>("bank_account");
+  const [importAccountId, setImportAccountId] = useState(settings.defaultAccountId);
+  const [importCardId, setImportCardId] = useState(settings.defaultCardId);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [selectedCardBillComparison, setSelectedCardBillComparison] = useState<{
+    cardId: string;
+    monthValue: string;
+  } | null>(null);
   const [selectedMonthlyGridCard, setSelectedMonthlyGridCard] = useState<{
     rowId: string;
     sourceId: string;
@@ -994,19 +1135,303 @@ export function FinanceApp() {
       });
   }
 
-  function renderCategoryOptions(type: Transaction["type"], options?: { includeHidden?: boolean }) {
-    return getSelectableCategories(type, options).map((category) => (
-      <option key={category.id} value={category.id}>
-        {getCategoryOptionLabel(category)}
-      </option>
-    ));
-  }
-
   function getCategorySelectOptions(type: Transaction["type"], options?: { includeHidden?: boolean }) {
     return getSelectableCategories(type, options).map((category) => ({
       value: category.id,
       label: getCategoryOptionLabel(category),
     }));
+  }
+
+  function getSuggestedImportCategoryId(normalizedDescription: string, type: Transaction["type"]) {
+    const lowerDescription = normalizedDescription.toLowerCase();
+    const directCategory = categories.find((category) =>
+      lowerDescription.includes(category.name.toLowerCase()),
+    );
+
+    if (directCategory) {
+      return directCategory.id;
+    }
+
+    if (lowerDescription.includes("ifood") || lowerDescription.includes("mercado") || lowerDescription.includes("restaurante")) {
+      return categories.find((category) => category.name.toLowerCase().includes("aliment"))?.id;
+    }
+
+    if (lowerDescription.includes("uber") || lowerDescription.includes("99 ")) {
+      return categories.find((category) => category.name.toLowerCase().includes("transporte"))?.id;
+    }
+
+    if (lowerDescription.includes("spotify") || lowerDescription.includes("netflix")) {
+      return categories.find((category) => category.name.toLowerCase().includes("assin"))?.id;
+    }
+
+    return categories.find((category) => category.type === type && !isHiddenUiCategoryId(category.id))?.id ?? categories[0]?.id;
+  }
+
+  function buildImportedItem(
+    batchId: string,
+    rawDescription: string,
+    date: string,
+    signedAmount: number,
+    sourceKind: ImportedStatementBatch["sourceKind"],
+  ): ImportedStatementItem | null {
+    if (!date || !rawDescription || signedAmount === 0) {
+      return null;
+    }
+
+    const normalizedDescription = normalizeImportedDescription(rawDescription);
+    const isCardCredit = sourceKind === "credit_card" && isCreditCardStatementCredit(normalizedDescription);
+    const direction =
+      sourceKind === "credit_card"
+        ? isCardCredit
+          ? "inflow"
+          : "outflow"
+        : signedAmount >= 0
+          ? "inflow"
+          : "outflow";
+    const amount = Math.abs(Number(signedAmount.toFixed(2)));
+    const transactionType: Transaction["type"] = direction === "inflow" ? "income" : "expense";
+    const paymentMethod = detectImportPaymentMethod(normalizedDescription, sourceKind);
+    const accountId = sourceKind === "credit_card" ? undefined : importAccountId;
+    const cardId = sourceKind === "credit_card" ? importCardId : undefined;
+    const importCard = cardId ? cards.find((card) => card.id === cardId) : undefined;
+    const statementMonth =
+      sourceKind === "credit_card" ? getSuggestedCardStatementMonth(importCard, date, date.slice(0, 7)) : undefined;
+    const sourceId = accountId ?? cardId ?? sourceKind;
+    const fingerprint = buildImportFingerprint(date, amount, normalizedDescription, sourceId);
+    const hasExistingTransaction = transactions.some(
+      (transaction) =>
+        buildImportFingerprint(
+          transaction.date,
+          transaction.amount,
+          normalizeImportedDescription(transaction.title || transaction.description || ""),
+          transaction.accountId ?? transaction.cardId ?? "unknown",
+        ) === fingerprint,
+    );
+    const hasExistingImport = importedStatementItems.some((item) => item.fingerprint === fingerprint);
+
+    return {
+      id: crypto.randomUUID(),
+      batchId,
+      rawDescription,
+      normalizedDescription,
+      date,
+      amount,
+      direction,
+      sourceKind,
+      paymentMethod,
+      accountId,
+      cardId,
+      suggestedCategoryId: getSuggestedImportCategoryId(normalizedDescription, transactionType),
+      suggestedTransactionType: transactionType,
+      statementMonth,
+      confidence: hasExistingTransaction || hasExistingImport ? 0.98 : 0.62,
+      status: hasExistingTransaction || hasExistingImport ? "duplicate" : "pending",
+      fingerprint,
+      suggestedMatch: hasExistingTransaction
+        ? {
+            kind: "existing_transaction",
+            targetId: "existing",
+            confidence: 0.98,
+            reason: "Data, valor, descricao e origem ja existem no historico.",
+          }
+        : undefined,
+    };
+  }
+
+  function parseImportedStatement(
+    text: string,
+    batchId: string,
+    fileName: string,
+    sourceKind: ImportedStatementBatch["sourceKind"],
+  ) {
+    const lowerFileName = fileName.toLowerCase();
+    if (lowerFileName.endsWith(".ofx") || text.includes("<OFX")) {
+      return Array.from(text.matchAll(/<STMTTRN>([\s\S]*?)(?=<STMTTRN>|<\/BANKTRANLIST>|<\/CREDITCARDMSGSRSV1>)/gi))
+        .map((match) => {
+          const block = match[1];
+          const date = parseImportDate(block.match(/<DTPOSTED>([^\r\n<]+)/i)?.[1] ?? "");
+          const amount = parseImportAmount(block.match(/<TRNAMT>([^\r\n<]+)/i)?.[1] ?? "");
+          const description =
+            block.match(/<MEMO>([^\r\n<]+)/i)?.[1] ??
+            block.match(/<NAME>([^\r\n<]+)/i)?.[1] ??
+            "Lancamento OFX";
+          return buildImportedItem(batchId, description, date, amount, sourceKind);
+        })
+        .filter((item): item is ImportedStatementItem => Boolean(item));
+    }
+
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (!lines.length) {
+      return [];
+    }
+
+    const firstColumns = splitCsvLine(lines[0]).map((column) => normalizeImportedDescription(column));
+    const hasHeader = firstColumns.some((column) => ["DATA", "DATE", "DESCRICAO", "DESCRIPTION", "HISTORICO", "VALOR", "AMOUNT"].includes(column));
+    const header = hasHeader ? firstColumns : [];
+    const dataLines = hasHeader ? lines.slice(1) : lines;
+    const findIndex = (candidates: string[]) => header.findIndex((column) => candidates.includes(column));
+    const dateIndex = hasHeader ? findIndex(["DATA", "DATE", "DTPOSTED"]) : -1;
+    const descriptionIndex = hasHeader ? findIndex(["DESCRICAO", "DESCRIPTION", "HISTORICO", "MEMO", "NAME"]) : -1;
+    const amountIndex = hasHeader ? findIndex(["VALOR", "AMOUNT", "TRNAMT"]) : -1;
+
+    return dataLines
+      .map((line) => {
+        const columns = splitCsvLine(line);
+        const inferredDateIndex = dateIndex >= 0 ? dateIndex : columns.findIndex((column) => Boolean(parseImportDate(column)));
+        const inferredAmountIndex = amountIndex >= 0 ? amountIndex : columns.findLastIndex((column) => parseImportAmount(column) !== 0);
+        const inferredDescriptionIndex =
+          descriptionIndex >= 0
+            ? descriptionIndex
+            : columns.findIndex((_, index) => index !== inferredDateIndex && index !== inferredAmountIndex);
+
+        return buildImportedItem(
+          batchId,
+          columns[inferredDescriptionIndex] ?? "Lancamento importado",
+          parseImportDate(columns[inferredDateIndex] ?? ""),
+          parseImportAmount(columns[inferredAmountIndex] ?? ""),
+          sourceKind,
+        );
+      })
+      .filter((item): item is ImportedStatementItem => Boolean(item));
+  }
+
+  function updateImportedBatchCounts(batchId: string, nextItems: ImportedStatementItem[]) {
+    setImportedStatementBatches((current) =>
+      current.map((batch) => {
+        if (batch.id !== batchId) {
+          return batch;
+        }
+
+        const batchItems = nextItems.filter((item) => item.batchId === batchId);
+        const confirmedCount = batchItems.filter((item) => item.status === "confirmed").length;
+        const ignoredCount = batchItems.filter((item) => item.status === "ignored").length;
+        const duplicateCount = batchItems.filter((item) => item.status === "duplicate").length;
+        const reviewedCount = confirmedCount + ignoredCount + duplicateCount;
+
+        return {
+          ...batch,
+          confirmedCount,
+          ignoredCount,
+          duplicateCount,
+          status:
+            reviewedCount >= batchItems.length
+              ? "confirmed"
+              : reviewedCount > 0
+                ? "partially_confirmed"
+                : "pending_review",
+        };
+      }),
+    );
+  }
+
+  async function handleImportStatementFile(file: File | null) {
+    if (!file) {
+      return;
+    }
+
+    setImportError(null);
+
+    try {
+      const text = await file.text();
+      const batchId = crypto.randomUUID();
+      const parsedItems = parseImportedStatement(text, batchId, file.name, importSourceKind);
+
+      if (!parsedItems.length) {
+        setImportError("Nao foi possivel encontrar lancamentos nesse arquivo.");
+        return;
+      }
+
+      const dates = parsedItems.map((item) => item.date).sort((left, right) => left.localeCompare(right));
+      const batch: ImportedStatementBatch = {
+        id: batchId,
+        fileName: file.name,
+        fileType: file.name.toLowerCase().endsWith(".ofx") ? "ofx" : "csv",
+        sourceKind: importSourceKind,
+        accountId: importSourceKind === "credit_card" ? undefined : importAccountId,
+        cardId: importSourceKind === "credit_card" ? importCardId : undefined,
+        importedAt: new Date().toISOString(),
+        periodStart: dates[0],
+        periodEnd: dates.at(-1),
+        status: parsedItems.every((item) => item.status === "duplicate") ? "confirmed" : "pending_review",
+        itemCount: parsedItems.length,
+        confirmedCount: 0,
+        ignoredCount: 0,
+        duplicateCount: parsedItems.filter((item) => item.status === "duplicate").length,
+      };
+
+      setImportedStatementBatches((current) => [batch, ...current]);
+      setImportedStatementItems((current) => [...parsedItems, ...current]);
+    } catch {
+      setImportError("Nao foi possivel ler o arquivo selecionado.");
+    }
+  }
+
+  function handleConfirmImportedItem(itemId: string) {
+    const item = importedStatementItems.find((current) => current.id === itemId);
+    if (!item || item.status !== "pending") {
+      return;
+    }
+
+    const category =
+      categories.find((current) => current.id === item.suggestedCategoryId) ??
+      categories.find((current) => current.type === item.suggestedTransactionType) ??
+      categories[0];
+
+    if (!category) {
+      return;
+    }
+
+    const paymentMethod: PaymentMethod =
+      item.paymentMethod === "unknown"
+        ? item.sourceKind === "credit_card"
+          ? "credit_card"
+          : "pix"
+        : item.paymentMethod;
+    const nextTransaction: Transaction = {
+      id: crypto.randomUUID(),
+      title: item.rawDescription,
+      type: item.suggestedTransactionType ?? (item.direction === "inflow" ? "income" : "expense"),
+      amount: item.amount,
+      date: item.date,
+      categoryId: category.id,
+      categoryName: category.name,
+      paymentMethod,
+      status: item.direction === "inflow" ? "received" : "paid",
+      incomeKind: item.direction === "inflow" ? "variable" : undefined,
+      expenseKind: item.direction === "outflow" ? "variable" : undefined,
+      accountId: item.accountId ?? settings.defaultAccountId,
+      cardId: paymentMethod === "credit_card" || paymentMethod === "debit_card" ? item.cardId : undefined,
+      cardMode: paymentMethod === "credit_card" ? "credit" : paymentMethod === "debit_card" ? "debit" : undefined,
+      description: `IMPORT:${item.batchId}:${item.id}`,
+    };
+
+    setTransactions((current) => [nextTransaction, ...current].sort((left, right) => right.date.localeCompare(left.date)));
+    setImportedStatementItems((current) => {
+      const nextItems = current.map((currentItem) =>
+        currentItem.id === itemId
+          ? { ...currentItem, status: "confirmed" as const, confirmedTransactionId: nextTransaction.id }
+          : currentItem,
+      );
+      updateImportedBatchCounts(item.batchId, nextItems);
+      return nextItems;
+    });
+  }
+
+  function handleIgnoreImportedItem(itemId: string) {
+    const item = importedStatementItems.find((current) => current.id === itemId);
+    if (!item) {
+      return;
+    }
+
+    setImportedStatementItems((current) => {
+      const nextItems = current.map((currentItem) =>
+        currentItem.id === itemId
+          ? { ...currentItem, status: "ignored" as const, ignoredReason: "Ignorado manualmente" }
+          : currentItem,
+      );
+      updateImportedBatchCounts(item.batchId, nextItems);
+      return nextItems;
+    });
   }
 
   const buildPersistedState = useCallback(
@@ -1021,6 +1446,9 @@ export function FinanceApp() {
       fixedEntries,
       plannedPurchases,
       investments,
+      cardBillEstimates,
+      importedStatementBatches,
+      importedStatementItems,
       settings,
       monthlyPlansByMonth,
     }),
@@ -1035,6 +1463,9 @@ export function FinanceApp() {
       fixedEntries,
       plannedPurchases,
       investments,
+      cardBillEstimates,
+      importedStatementBatches,
+      importedStatementItems,
       settings,
       monthlyPlansByMonth,
     ],
@@ -1116,10 +1547,13 @@ export function FinanceApp() {
     if (persisted.fixedEntries) setFixedEntries(persisted.fixedEntries);
     if (persisted.plannedPurchases) setPlannedPurchases(persisted.plannedPurchases);
     if (persisted.investments) setInvestments(persisted.investments);
+    if (persisted.cardBillEstimates) setCardBillEstimates(persisted.cardBillEstimates);
+    if (persisted.importedStatementBatches) setImportedStatementBatches(persisted.importedStatementBatches);
+    if (persisted.importedStatementItems) setImportedStatementItems(persisted.importedStatementItems);
     if (persisted.settings) setSettings({
       ...seedSettings,
       ...persisted.settings,
-      defaultBillPaymentMethod: (persisted.settings as any).defaultBillPaymentMethod ?? seedSettings.defaultBillPaymentMethod,
+      defaultBillPaymentMethod: persisted.settings.defaultBillPaymentMethod ?? seedSettings.defaultBillPaymentMethod,
     });
     if (persisted.monthlyPlansByMonth) setMonthlyPlansByMonth(persisted.monthlyPlansByMonth);
   }, []);
@@ -1367,7 +1801,8 @@ export function FinanceApp() {
         .filter((transaction) => transaction.cardId === card.id && transaction.cardMode === "credit")
         .reduce<Record<string, number>>((accumulator, transaction) => {
           const monthValue = getCardStatementMonthForTransaction(card, transaction);
-          accumulator[monthValue] = (accumulator[monthValue] ?? 0) + transaction.amount;
+          accumulator[monthValue] =
+            (accumulator[monthValue] ?? 0) + getCreditCardTransactionSignedAmount(transaction);
           return accumulator;
         }, {});
 
@@ -1407,6 +1842,167 @@ export function FinanceApp() {
         });
     })
     .sort((left, right) => left.bill.dueDate.localeCompare(right.bill.dueDate));
+
+  function getCardBillEstimateKey(cardId: string, monthValue: string) {
+    return `${cardId}:${monthValue}`;
+  }
+
+  function getCardBillRealAmount(cardId: string, monthValue: string) {
+    const bill = autoCardBills.find((item) => item.cardId === cardId && item.statementMonth === monthValue);
+    return bill?.bill.amount ?? 0;
+  }
+
+  function getCardBillAutoEstimatedAmount(cardId: string, monthValue: string) {
+    return plannedPurchases
+      .filter(
+        (purchase) =>
+          purchase.status !== "cancelled" &&
+          purchase.status !== "bought" &&
+          !realizedPlannedPurchaseIds.has(purchase.id) &&
+          purchase.plannedPaymentMethod === "card" &&
+          purchase.plannedCardId === cardId &&
+          (purchase.plannedCardMode ?? "credit") === "credit",
+      )
+      .reduce((sum, purchase) => sum + (getPlannedPurchaseAmountByMonth(purchase)[monthValue] ?? 0), 0);
+  }
+
+  function getCardBillGridAmount(cardId: string, monthValue: string) {
+    const estimate = cardBillEstimates[getCardBillEstimateKey(cardId, monthValue)];
+    if (estimate && !estimate.isAutoEstimate) {
+      return estimate.estimatedAmount;
+    }
+
+    return getCardBillAutoEstimatedAmount(cardId, monthValue);
+  }
+
+  function getCardBillPaymentMarker(cardId: string, monthValue: string) {
+    return `CARD_BILL_PAYMENT:${cardId}:${monthValue}`;
+  }
+
+  function openCardBillComparison(cardId: string, monthValue: string) {
+    setSelectedCardBillComparison({ cardId, monthValue });
+  }
+
+  function closeCardBillComparison() {
+    setSelectedCardBillComparison(null);
+  }
+
+  function handleUpdateCardBillEstimate(cardId: string, monthValue: string, rawValue: string) {
+    const parsedValue = Number(rawValue.replace(",", ".")) || 0;
+    const estimatedAmount = Math.max(0, Number(parsedValue.toFixed(2)));
+    const key = getCardBillEstimateKey(cardId, monthValue);
+
+    setCardBillEstimates((current) => ({
+      ...current,
+      [key]: {
+        cardId,
+        monthValue,
+        estimatedAmount,
+        isAutoEstimate: false,
+        status: current[key]?.status ?? "pending",
+        paidTransactionId: current[key]?.paidTransactionId,
+      },
+    }));
+  }
+
+  function handleUseAutoCardBillEstimate(cardId: string, monthValue: string) {
+    const key = getCardBillEstimateKey(cardId, monthValue);
+    const autoAmount = getCardBillAutoEstimatedAmount(cardId, monthValue);
+
+    setCardBillEstimates((current) => ({
+      ...current,
+      [key]: {
+        cardId,
+        monthValue,
+        estimatedAmount: autoAmount,
+        isAutoEstimate: true,
+        status: current[key]?.status ?? "pending",
+        paidTransactionId: current[key]?.paidTransactionId,
+      },
+    }));
+  }
+
+  function handleToggleCardBillPaid(cardId: string, monthValue: string) {
+    const card = cards.find((item) => item.id === cardId);
+    if (!card) {
+      return;
+    }
+
+    const key = getCardBillEstimateKey(cardId, monthValue);
+    const marker = getCardBillPaymentMarker(cardId, monthValue);
+    const currentEstimate = cardBillEstimates[key];
+    const isPaid = currentEstimate?.status === "paid";
+
+    if (isPaid) {
+      setTransactions((current) =>
+        current.filter(
+          (transaction) =>
+            transaction.id !== currentEstimate?.paidTransactionId && transaction.description !== marker,
+        ),
+      );
+      setCardBillEstimates((current) => ({
+        ...current,
+        [key]: {
+          cardId,
+          monthValue,
+          estimatedAmount: current[key]?.estimatedAmount ?? getCardBillGridAmount(cardId, monthValue),
+          isAutoEstimate: current[key]?.isAutoEstimate ?? true,
+          status: "pending",
+        },
+      }));
+      return;
+    }
+
+    const realAmount = getCardBillRealAmount(cardId, monthValue);
+    if (realAmount <= 0) {
+      return;
+    }
+
+    const autoBill = autoCardBills.find((item) => item.cardId === cardId && item.statementMonth === monthValue);
+    const dueDate = autoBill?.bill.dueDate ?? `${monthValue}-14`;
+    const paymentTransaction: Transaction = {
+      id: currentEstimate?.paidTransactionId ?? crypto.randomUUID(),
+      title: `Pagamento fatura ${card.name}`,
+      type: "expense",
+      amount: realAmount,
+      date: dueDate,
+      categoryId: "cat-bills",
+      categoryName: "Fatura do cartao",
+      paymentMethod: settings.defaultBillPaymentMethod === "card" ? "pix" : settings.defaultBillPaymentMethod,
+      status: "paid",
+      expenseKind: "basic_bill",
+      accountId: card.linkedAccountId ?? settings.defaultAccountId,
+      description: marker,
+    };
+
+    setTransactions((current) => {
+      const existingIndex = current.findIndex(
+        (transaction) =>
+          transaction.id === currentEstimate?.paidTransactionId || transaction.description === marker,
+      );
+
+      if (existingIndex >= 0) {
+        return current
+          .map((transaction, index) => (index === existingIndex ? { ...transaction, ...paymentTransaction } : transaction))
+          .sort((left, right) => right.date.localeCompare(left.date));
+      }
+
+      return [paymentTransaction, ...current].sort((left, right) => right.date.localeCompare(left.date));
+    });
+
+    setCardBillEstimates((current) => ({
+      ...current,
+      [key]: {
+        cardId,
+        monthValue,
+        estimatedAmount: current[key]?.estimatedAmount ?? getCardBillGridAmount(cardId, monthValue),
+        isAutoEstimate: current[key]?.isAutoEstimate ?? true,
+        status: "paid",
+        paidTransactionId: paymentTransaction.id,
+      },
+    }));
+  }
+
   const allBills = [
     ...bills.filter((bill) => !isCreditLinkedBill(bill)),
     ...autoCardBills.map((item) => item.bill),
@@ -1508,7 +2104,7 @@ export function FinanceApp() {
           transaction.cardMode === "credit" &&
           months.has(getCardStatementMonthForTransaction(card, transaction)),
       )
-      .reduce((sum, transaction) => sum + transaction.amount, 0);
+      .reduce((sum, transaction) => sum + getCreditCardTransactionSignedAmount(transaction), 0);
   };
   const getCardAvailableLimit = (
     cardId: string,
@@ -1587,11 +2183,13 @@ export function FinanceApp() {
       .map((transaction) => transaction.linkedPlannedPurchaseId)
       .filter((value): value is string => Boolean(value)),
   );
+  function isPlannedPurchaseRealized(purchase: PlannedPurchase) {
+    return purchase.status === "bought" || realizedPlannedPurchaseIds.has(purchase.id);
+  }
   const activePlannedPurchases = plannedPurchases.filter(
     (purchase) =>
       purchase.status !== "cancelled" &&
-      purchase.status !== "bought" &&
-      !realizedPlannedPurchaseIds.has(purchase.id),
+      !isPlannedPurchaseRealized(purchase),
   );
   const reservePurchases = activePlannedPurchases.filter(
     (purchase) => purchase.planningMode === "save_over_time",
@@ -1796,7 +2394,7 @@ export function FinanceApp() {
     (transaction) => (transaction.installmentTotal ?? 1) > 1,
   );
   const selectedCardStatementTotal = selectedCardStatementTransactions.reduce(
-    (sum, transaction) => sum + transaction.amount,
+    (sum, transaction) => sum + getCreditCardTransactionSignedAmount(transaction),
     0,
   );
   const selectedCardLimitSnapshot = selectedCardDetail
@@ -2635,9 +3233,22 @@ export function FinanceApp() {
     return planningBoardColumns.find((column) => column.id === purchase.boardColumn)?.label ?? "Planejamento";
   }
 
-  function openPurchaseModal(purchase?: PlannedPurchase) {
+  function openPurchaseModal(purchase?: PlannedPurchase, options?: PurchaseModalOptions) {
     setEditingPurchaseId(purchase?.id ?? null);
-    setDraftPurchase(buildPurchaseDraft(purchase));
+    setDraftPurchase({
+      ...buildPurchaseDraft(purchase),
+      ...(options?.planningMode ? { planningMode: options.planningMode } : {}),
+      ...(options?.paymentOption ? { paymentOption: options.paymentOption } : {}),
+      ...(options?.planningMode === "card_parcelado"
+        ? {
+            planningMode: "card_parcelado",
+            paymentOption: "card",
+            cardId: settings.defaultCardId,
+            cardMode: "credit",
+            installments: 2,
+          }
+        : {}),
+    });
     setIsPurchaseModalOpen(true);
   }
 
@@ -4079,7 +4690,6 @@ export function FinanceApp() {
     const transactionItems = transactions
       .filter(
         (transaction) =>
-          transaction.type === "expense" &&
           transaction.cardId === cardId &&
           transaction.cardMode === "credit" &&
           getCardStatementMonthForTransaction(card, transaction) === statementMonth,
@@ -4100,8 +4710,8 @@ export function FinanceApp() {
         return {
           id: `transaction-${transaction.id}`,
           title: transaction.title,
-          amount: transaction.amount,
-          support: sourceLabel,
+          amount: getCreditCardTransactionSignedAmount(transaction),
+          support: transaction.type === "income" ? `${sourceLabel} - Credito/estorno` : sourceLabel,
           sortKey: `${transaction.date}-${String(index).padStart(4, "0")}`,
         };
       });
@@ -4224,14 +4834,12 @@ export function FinanceApp() {
     const cardAutoRows: MonthlyGridRow[] = cards
       .filter((card) => card.availableMode !== "debit")
       .map((card) => {
-        const relatedBills = autoCardBills.filter((item) => item.cardId === card.id);
         const amountByMonth = Object.fromEntries(
-          salaryCalendarMonths.map((monthItem) => [monthItem.monthValue, 0]),
+          salaryCalendarMonths.map((monthItem) => [
+            monthItem.monthValue,
+            getCardBillGridAmount(card.id, monthItem.monthValue),
+          ]),
         ) as Record<string, number>;
-
-        relatedBills.forEach((item) => {
-          amountByMonth[item.statementMonth] = item.bill.amount;
-        });
 
         return {
           id: `card-auto-grid-${card.id}`,
@@ -4251,7 +4859,13 @@ export function FinanceApp() {
           completedMonths: [],
         };
       })
-      .filter((row) => Object.values(row.amountByMonth).some((amount) => amount > 0));
+      .filter((row) =>
+        salaryCalendarMonths.some(
+          (monthItem) =>
+            (row.amountByMonth[monthItem.monthValue] ?? 0) > 0 ||
+            getCardBillRealAmount(row.sourceId, monthItem.monthValue) > 0,
+        ),
+      );
 
     const purchaseRows: MonthlyGridRow[] = plannedPurchases
       .filter(
@@ -4321,6 +4935,67 @@ export function FinanceApp() {
       amountByMonth: createFixedEntryAmountDraft(referenceMonthDate),
     });
     setIsFixedEntryModalOpen(false);
+  }
+
+  function createInlineEntryDraft(section: InlineNewEntry["section"]): InlineNewEntry {
+    return {
+      section,
+      title: "",
+      amountByMonth: Object.fromEntries(
+        salaryCalendarMonths.map((monthItem) => [monthItem.monthValue, ""]),
+      ) as Record<string, string>,
+    };
+  }
+
+  function handleStartInlineNewEntry(section: InlineNewEntry["section"]) {
+    setInlineNewEntry(createInlineEntryDraft(section));
+  }
+
+  function handleCancelInlineNewEntry() {
+    setInlineNewEntry(null);
+  }
+
+  function handleCreateFixedEntryFromGrid() {
+    if (!inlineNewEntry?.title.trim()) {
+      return;
+    }
+
+    const amountByMonth = Object.fromEntries(
+      salaryCalendarMonths.map((monthItem) => {
+        const parsedAmount = Number(inlineNewEntry.amountByMonth[monthItem.monthValue]?.replace(",", ".") || 0);
+        return [monthItem.monthValue, Math.max(0, Number((parsedAmount || 0).toFixed(2)))];
+      }),
+    ) as Record<string, number>;
+
+    if (!Object.values(amountByMonth).some((amount) => amount > 0)) {
+      return;
+    }
+
+    const kind = getFixedEntryKind(inlineNewEntry.section);
+    const category =
+      categories.find((item) => item.id === getDefaultCategoryIdForFixedSection(inlineNewEntry.section)) ??
+      categories.find((item) => item.type === kind) ??
+      categories[0];
+
+    if (!category) {
+      return;
+    }
+
+    const nextEntry: FixedFlowEntry = {
+      id: crypto.randomUUID(),
+      section: inlineNewEntry.section,
+      title: inlineNewEntry.title.trim(),
+      kind,
+      categoryId: category.id,
+      categoryName: category.name,
+      amountByMonth,
+      completedMonths: [],
+      paymentMethod: "pix",
+      accountId: settings.defaultAccountId,
+    };
+
+    setFixedEntries((current) => [...current, nextEntry]);
+    setInlineNewEntry(null);
   }
 
   function openInvestmentModal(investment?: Investment) {
@@ -4956,6 +5631,10 @@ export function FinanceApp() {
       return;
     }
 
+    if (isPlannedPurchaseRealized(purchase)) {
+      return;
+    }
+
     const parsedValue = Number(rawValue.replace(",", ".")) || 0;
     const nextAmount = Math.max(0, Number(parsedValue.toFixed(2)));
     const nextAmounts = {
@@ -5295,6 +5974,10 @@ export function FinanceApp() {
     if (row.sourceType === "planned_purchase") {
       const purchase = plannedPurchases.find((item) => item.id === row.sourceId);
       if (!purchase) {
+        return;
+      }
+
+      if (isPlannedPurchaseRealized(purchase)) {
         return;
       }
 
@@ -5979,6 +6662,13 @@ export function FinanceApp() {
         tone: "from-sky-600 to-blue-500",
         icon: CreditCard,
       },
+      {
+        id: "imports",
+        label: "Importar",
+        description: "Extratos",
+        tone: "from-slate-700 to-slate-500",
+        icon: CheckCircle2,
+      },
     ];
     const activeHomeTab = homeTabs.find((tab) => tab.id === homeTab) ?? homeTabs[0];
 
@@ -6047,8 +6737,227 @@ export function FinanceApp() {
               ? renderPlanning()
               : homeTab === "accounts"
                 ? renderBills()
-                : renderCardsHomeTab()}
+                : homeTab === "cards"
+                  ? renderCardsHomeTab()
+                  : renderImportWorkspace()}
         </div>
+      </div>
+    );
+  }
+
+  function renderImportWorkspace() {
+    const reviewItems = importedStatementItems
+      .filter((item) => item.status === "pending" || item.status === "duplicate")
+      .sort((left, right) => right.date.localeCompare(left.date));
+    const confirmedItems = importedStatementItems.filter((item) => item.status === "confirmed");
+    const ignoredItems = importedStatementItems.filter((item) => item.status === "ignored");
+
+    return (
+      <div className="space-y-4">
+        <Panel
+          title="Importar extratos"
+          description="Arquivos CSV e OFX entram como itens pendentes para revisao antes de virarem transacoes reais."
+        >
+          <div className="grid gap-3 lg:grid-cols-[1fr_1fr_1.2fr]">
+            <FormField label="Origem">
+              <CustomSelect
+                value={importSourceKind}
+                onChange={(value) => setImportSourceKind(value as ImportedStatementBatch["sourceKind"])}
+                options={[
+                  { value: "bank_account", label: "Conta bancaria", icon: Building2 },
+                  { value: "credit_card", label: "Cartao de credito", icon: CreditCard },
+                  { value: "unknown", label: "Detectar depois", icon: CheckCircle2 },
+                ]}
+              />
+            </FormField>
+            {importSourceKind === "credit_card" ? (
+              <FormField label="Cartao">
+                <CustomSelect
+                  value={importCardId}
+                  onChange={setImportCardId}
+                  options={cards.map((card) => ({ value: card.id, label: card.name, icon: CreditCard }))}
+                />
+              </FormField>
+            ) : (
+              <FormField label="Conta">
+                <CustomSelect
+                  value={importAccountId}
+                  onChange={setImportAccountId}
+                  options={accounts.map((account) => ({ value: account.id, label: account.name, icon: Building2 }))}
+                />
+              </FormField>
+            )}
+            <FormField label="Arquivo CSV ou OFX">
+              <input
+                type="file"
+                accept=".csv,.ofx,text/csv"
+                onChange={(event) => {
+                  void handleImportStatementFile(event.target.files?.[0] ?? null);
+                  event.target.value = "";
+                }}
+                className="field bg-white"
+              />
+            </FormField>
+          </div>
+          {importError ? (
+            <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+              {importError}
+            </div>
+          ) : null}
+          <div className="mt-4 grid gap-3 sm:grid-cols-4">
+            <MetricStack label="Batches" value={String(importedStatementBatches.length)} />
+            <MetricStack label="Pendentes" value={String(reviewItems.filter((item) => item.status === "pending").length)} />
+            <MetricStack label="Confirmados" value={String(confirmedItems.length)} />
+            <MetricStack label="Ignorados" value={String(ignoredItems.length)} />
+          </div>
+        </Panel>
+
+        <Panel title="Revisao dos lancamentos" description="Confirme somente o que deve entrar no historico real.">
+          <div className="space-y-3">
+            {reviewItems.length ? (
+              reviewItems.map((item) => {
+                const transactionType = item.suggestedTransactionType ?? (item.direction === "inflow" ? "income" : "expense");
+
+                return (
+                  <div
+                    key={item.id}
+                    className={`rounded-2xl border px-4 py-4 ${
+                      item.status === "duplicate"
+                        ? "border-amber-200 bg-amber-50"
+                        : "border-slate-200 bg-white"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-slate-900">{item.rawDescription}</p>
+                          {item.status === "duplicate" ? (
+                            <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700">
+                              Duplicado
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="mt-1 text-sm text-slate-500">
+                          {formatShortDate(item.date)} - {item.direction === "inflow" ? "Entrada" : "Saida"} - confianca {Math.round(item.confidence * 100)}%
+                        </p>
+                        {item.statementMonth ? (
+                          <p className="mt-2 text-xs font-semibold uppercase tracking-[0.16em] text-sky-600">
+                            Vai para a fatura de {formatMonthLabel(monthValueToDate(item.statementMonth))}
+                          </p>
+                        ) : null}
+                      </div>
+                      <p className="text-lg font-semibold text-slate-900">{formatCurrency(item.amount)}</p>
+                    </div>
+
+                    <div className="mt-4 grid gap-3 md:grid-cols-3">
+                      <FormField label="Categoria">
+                        <CustomSelect
+                          value={item.suggestedCategoryId ?? ""}
+                          onChange={(value) =>
+                            setImportedStatementItems((current) =>
+                              current.map((currentItem) =>
+                                currentItem.id === item.id ? { ...currentItem, suggestedCategoryId: value } : currentItem,
+                              ),
+                            )
+                          }
+                          options={getCategorySelectOptions(transactionType).map((option) => ({ ...option, icon: Tag }))}
+                        />
+                      </FormField>
+                      <FormField label="Metodo">
+                        <CustomSelect
+                          value={item.paymentMethod}
+                          onChange={(value) =>
+                            setImportedStatementItems((current) =>
+                              current.map((currentItem) =>
+                                currentItem.id === item.id
+                                  ? { ...currentItem, paymentMethod: value as ImportedStatementItem["paymentMethod"] }
+                                  : currentItem,
+                              ),
+                            )
+                          }
+                          options={[
+                            { value: "pix", label: "Pix" },
+                            { value: "bank_transfer", label: "Transferencia" },
+                            { value: "debit_card", label: "Debito" },
+                            { value: "credit_card", label: "Credito" },
+                            { value: "cash", label: "Dinheiro" },
+                            { value: "unknown", label: "Nao definido" },
+                          ]}
+                        />
+                      </FormField>
+                      <FormField label="Tipo">
+                        <CustomSelect
+                          value={transactionType}
+                          onChange={(value) =>
+                            setImportedStatementItems((current) =>
+                              current.map((currentItem) =>
+                                currentItem.id === item.id
+                                  ? { ...currentItem, suggestedTransactionType: value as Transaction["type"] }
+                                  : currentItem,
+                              ),
+                            )
+                          }
+                          options={[
+                            { value: "expense", label: "Despesa" },
+                            { value: "income", label: "Receita" },
+                          ]}
+                        />
+                      </FormField>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleIgnoreImportedItem(item.id)}
+                        className="rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        Ignorar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleConfirmImportedItem(item.id)}
+                        disabled={item.status === "duplicate"}
+                        className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                      >
+                        Confirmar
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                Nenhum item pendente. Importe um arquivo para iniciar a revisao.
+              </div>
+            )}
+          </div>
+        </Panel>
+
+        <Panel title="Arquivos importados" description="Historico dos batches processados nesta base local.">
+          <div className="space-y-3">
+            {importedStatementBatches.length ? (
+              importedStatementBatches.map((batch) => (
+                <div key={batch.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">{batch.fileName}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {batch.fileType.toUpperCase()} - {batch.itemCount} itens - {batch.status}
+                      </p>
+                    </div>
+                    <div className="text-right text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                      {batch.confirmedCount} confirmados / {batch.duplicateCount} duplicados
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                Nenhum arquivo importado ainda.
+              </div>
+            )}
+          </div>
+        </Panel>
       </div>
     );
   }
@@ -6248,6 +7157,14 @@ export function FinanceApp() {
                     rows.reduce((sum, row) => sum + (row.amountByMonth[monthItem.monthValue] ?? 0), 0),
                   );
                   const isCollapsed = collapsedFixedSections[section];
+                  const rowGroups =
+                    section === "Contas"
+                      ? contasSubTypeOrder
+                          .map((subType) => ({
+                            key: subType,
+                            rows: rows.filter((row) => getContasSubType(row) === subType),
+                          }))
+                      : [{ key: section, rows }];
 
                   return (
                     <div
@@ -6269,9 +7186,7 @@ export function FinanceApp() {
                         <div className="flex flex-wrap items-start gap-2">
                           <button
                             type="button"
-                            onClick={() =>
-                              section === "Planejamento" ? openPurchaseModal() : openFixedEntryModal(section)
-                            }
+                            onClick={() => handleStartInlineNewEntry(section === "Ganhos" ? "Ganhos" : "Contas")}
                             className="flex items-center gap-1.5 rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
                           >
                             <Plus className="h-3.5 w-3.5" />
@@ -6322,7 +7237,130 @@ export function FinanceApp() {
                               </tr>
                             </thead>
                             <tbody>
-                              {rows.map((row) => (
+                              {rowGroups.map((group, groupIndex) => (
+                                <Fragment key={group.key}>
+                                  {section === "Contas" && groupIndex > 0 ? (
+                                    <tr>
+                                      <td colSpan={salaryCalendarMonths.length + 2} className="border-0 bg-transparent px-0 py-1">
+                                        <div className="border-t border-dashed border-slate-300" />
+                                      </td>
+                                    </tr>
+                                  ) : null}
+                                  {section === "Contas" ? (
+                                    <tr>
+                                      <td colSpan={salaryCalendarMonths.length + 2} className="border-0 bg-transparent px-0 py-1.5">
+                                        <div className="flex items-center justify-between gap-3 rounded-2xl bg-white/70 px-3 py-2">
+                                          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                                            {group.key}
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              if (group.key === "Contas fixas") {
+                                                handleStartInlineNewEntry("Contas");
+                                                return;
+                                              }
+
+                                              if (group.key === "Compras planejadas") {
+                                                openPurchaseModal();
+                                                return;
+                                              }
+
+                                              if (group.key === "Faturas") {
+                                                openPurchaseModal(undefined, { planningMode: "card_parcelado" });
+                                                return;
+                                              }
+
+                                              openDebtModal();
+                                            }}
+                                            className="rounded-full bg-slate-900 px-2.5 py-1 text-[10px] font-semibold text-white transition hover:bg-slate-700"
+                                          >
+                                            <Plus className="h-3 w-3" />
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ) : null}
+                                  {inlineNewEntry?.section === section &&
+                                  (section === "Ganhos" || group.key === "Contas fixas") ? (
+                                    <tr className="align-top">
+                                      <th className="sticky left-0 z-10 border border-dashed border-sky-300 bg-sky-50 px-2 py-2.5 text-left">
+                                        <input
+                                          autoFocus
+                                          value={inlineNewEntry.title}
+                                          onChange={(event) =>
+                                            setInlineNewEntry((current) =>
+                                              current ? { ...current, title: event.target.value } : current,
+                                            )
+                                          }
+                                          onKeyDown={(event) => {
+                                            if (event.key === "Enter") {
+                                              event.preventDefault();
+                                              handleCreateFixedEntryFromGrid();
+                                            }
+
+                                            if (event.key === "Escape") {
+                                              handleCancelInlineNewEntry();
+                                            }
+                                          }}
+                                          placeholder="Novo item..."
+                                          className="w-full bg-transparent text-xs font-semibold text-slate-900 outline-none placeholder:text-slate-400"
+                                        />
+                                      </th>
+                                      {salaryCalendarMonths.map((monthItem) => (
+                                        <td key={`inline-${monthItem.monthValue}`} className="border border-dashed border-sky-300 bg-sky-50 p-1">
+                                          <input
+                                            value={inlineNewEntry.amountByMonth[monthItem.monthValue] ?? ""}
+                                            onChange={(event) =>
+                                              setInlineNewEntry((current) =>
+                                                current
+                                                  ? {
+                                                      ...current,
+                                                      amountByMonth: {
+                                                        ...current.amountByMonth,
+                                                        [monthItem.monthValue]: event.target.value,
+                                                      },
+                                                    }
+                                                  : current,
+                                              )
+                                            }
+                                            onKeyDown={(event) => {
+                                              if (event.key === "Enter") {
+                                                event.preventDefault();
+                                                handleCreateFixedEntryFromGrid();
+                                              }
+
+                                              if (event.key === "Escape") {
+                                                handleCancelInlineNewEntry();
+                                              }
+                                            }}
+                                            inputMode="decimal"
+                                            placeholder="0"
+                                            className="min-h-[54px] w-full rounded-[16px] bg-white/80 px-2 text-[11px] font-semibold text-sky-900 outline-none placeholder:text-sky-300"
+                                          />
+                                        </td>
+                                      ))}
+                                      <td className="border border-dashed border-sky-300 bg-sky-50 px-2 py-2.5">
+                                        <div className="flex justify-end gap-1">
+                                          <button
+                                            type="button"
+                                            onClick={handleCreateFixedEntryFromGrid}
+                                            className="rounded-full bg-emerald-100 p-2 text-emerald-700 transition hover:bg-emerald-200"
+                                          >
+                                            <Check className="h-3.5 w-3.5" />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={handleCancelInlineNewEntry}
+                                            className="rounded-full bg-white p-2 text-slate-500 transition hover:bg-slate-100"
+                                          >
+                                            <X className="h-3.5 w-3.5" />
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ) : null}
+                                  {group.rows.map((row) => (
                                 <tr key={row.id} className="align-top">
                                   <th className="sticky left-0 z-10 border border-slate-200 bg-white px-2 py-2.5 text-left">
                                     <div className="flex items-start justify-between gap-2">
@@ -6377,6 +7415,14 @@ export function FinanceApp() {
                                       0,
                                       cardStatementItems.length - visibleCardStatementItems.length,
                                     );
+                                    const selectedMonthCellClass =
+                                      monthItem.monthValue === selectedMonth ? "ring-2 ring-inset ring-sky-400" : "";
+                                    const cardBillEstimate = isCardAutoBillRow
+                                      ? cardBillEstimates[getCardBillEstimateKey(row.sourceId, monthItem.monthValue)]
+                                      : undefined;
+                                    const cardBillRealAmount = isCardAutoBillRow
+                                      ? getCardBillRealAmount(row.sourceId, monthItem.monthValue)
+                                      : 0;
 
                                     return (
                                       <td
@@ -6419,7 +7465,7 @@ export function FinanceApp() {
                                                 : isCompleted
                                                   ? "cursor-grab bg-violet-100 text-violet-800 hover:bg-violet-200 active:cursor-grabbing"
                                                   : "cursor-grab bg-violet-50 text-violet-700 hover:bg-violet-100 active:cursor-grabbing"
-                                            }`}
+                                            } ${selectedMonthCellClass}`}
                                           >
                                             <input
                                               value={amount > 0 ? String(amount) : ""}
@@ -6448,12 +7494,12 @@ export function FinanceApp() {
                                                 : isCompleted
                                                   ? "bg-sky-100 text-sky-800"
                                                   : "bg-slate-100 text-slate-700"
-                                            }`}
+                                            } ${selectedMonthCellClass}`}
                                           >
                                             <button
                                               type="button"
                                               onClick={() =>
-                                                openCardDetails(row.sourceId, monthItem.monthValue)
+                                                openCardBillComparison(row.sourceId, monthItem.monthValue)
                                               }
                                               className="text-left"
                                             >
@@ -6461,9 +7507,26 @@ export function FinanceApp() {
                                                 {amount > 0 ? formatCurrency(amount) : "-"}
                                               </span>
                                               <span className="mt-2 block text-[9px] font-semibold uppercase tracking-[0.12em]">
-                                                {amount <= 0 ? "Sem fatura" : "Abrir"}
+                                                {amount <= 0 && cardBillRealAmount <= 0 ? "Sem fatura" : "Comparar"}
                                               </span>
                                             </button>
+                                            {amount > 0 || cardBillRealAmount > 0 ? (
+                                              <div className="mt-2 flex flex-wrap gap-1">
+                                                <span className="rounded-full bg-white/70 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.1em]">
+                                                  Real {formatCurrency(cardBillRealAmount)}
+                                                </span>
+                                                {cardBillEstimate && !cardBillEstimate.isAutoEstimate ? (
+                                                  <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.1em] text-violet-700">
+                                                    Manual
+                                                  </span>
+                                                ) : null}
+                                                {cardBillEstimate?.status === "paid" ? (
+                                                  <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.1em] text-emerald-700">
+                                                    Pago
+                                                  </span>
+                                                ) : null}
+                                              </div>
+                                            ) : null}
                                             {expandedCardBillRows[row.sourceId] ? (
                                               <div className="mt-2 space-y-1 border-t border-sky-200/70 pt-2">
                                                 {visibleCardStatementItems.length ? (
@@ -6523,7 +7586,7 @@ export function FinanceApp() {
                                                   : row.section === "Ganhos"
                                                     ? "cursor-grab bg-emerald-50 text-emerald-700 active:cursor-grabbing"
                                                     : "cursor-grab bg-rose-50 text-rose-700 active:cursor-grabbing"
-                                            }`}
+                                            } ${selectedMonthCellClass}`}
                                           >
                                             <input
                                               value={amount > 0 ? String(amount) : ""}
@@ -6552,6 +7615,8 @@ export function FinanceApp() {
                                     </p>
                                   </td>
                                 </tr>
+                                  ))}
+                                </Fragment>
                               ))}
                               <tr className="align-top">
                                 <th className="sticky left-0 z-10 rounded-bl-2xl border border-slate-200 bg-slate-900 px-2 py-2.5 text-left text-[10px] uppercase tracking-[0.16em] text-white">
@@ -6708,6 +7773,7 @@ export function FinanceApp() {
           </Panel>
 
           {renderMonthlyGridCardModal()}
+          {renderCardBillComparisonModal()}
           {renderFixedEntryModal()}
           {renderPurchaseModal()}
           </div>
@@ -7526,6 +8592,157 @@ export function FinanceApp() {
               </button>
             </div>
           </form>
+        </div>
+      </div>
+    );
+  }
+
+  function renderCardBillComparisonModal() {
+    if (!selectedCardBillComparison) {
+      return null;
+    }
+
+    const { cardId, monthValue } = selectedCardBillComparison;
+    const card = cards.find((item) => item.id === cardId);
+    if (!card) {
+      return null;
+    }
+
+    const key = getCardBillEstimateKey(cardId, monthValue);
+    const estimate = cardBillEstimates[key];
+    const autoEstimatedAmount = getCardBillAutoEstimatedAmount(cardId, monthValue);
+    const estimatedAmount = getCardBillGridAmount(cardId, monthValue);
+    const realAmount = getCardBillRealAmount(cardId, monthValue);
+    const difference = Number((estimatedAmount - realAmount).toFixed(2));
+    const realItems = getCardStatementGridItems(cardId, monthValue);
+    const isPaid = estimate?.status === "paid";
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+        <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
+          <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] text-sky-600">Estimado vs real</p>
+              <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                Fatura {card.name}
+              </h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Referencia {formatMonthLabel(monthValueToDate(monthValue))}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={closeCardBillComparison}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-600 transition hover:bg-slate-200"
+              aria-label="Fechar modal"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-violet-600">
+                  Estimado
+                </p>
+                <p className="mt-2 text-xl font-semibold text-violet-900">{formatCurrency(estimatedAmount)}</p>
+                <p className="mt-1 text-xs text-violet-500">
+                  {estimate && !estimate.isAutoEstimate ? "Manual" : "Automatico"}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-sky-100 bg-sky-50 px-4 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-600">Real</p>
+                <p className="mt-2 text-xl font-semibold text-sky-900">{formatCurrency(realAmount)}</p>
+                <p className="mt-1 text-xs text-sky-500">Transacoes de credito</p>
+              </div>
+              <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-600">
+                  Diferenca
+                </p>
+                <p className="mt-2 text-xl font-semibold text-amber-900">{formatCurrency(Math.abs(difference))}</p>
+                <p className="mt-1 text-xs text-amber-600">
+                  {difference === 0
+                    ? "Dentro do previsto"
+                    : difference > 0
+                      ? "Real abaixo do previsto"
+                      : "Real acima do previsto"}
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <FormField label="Valor estimado">
+                  <input
+                    value={String(estimatedAmount || "")}
+                    onChange={(event) => handleUpdateCardBillEstimate(cardId, monthValue, event.target.value)}
+                    inputMode="decimal"
+                    placeholder="0"
+                    className="field bg-white"
+                  />
+                </FormField>
+                <button
+                  type="button"
+                  onClick={() => handleUseAutoCardBillEstimate(cardId, monthValue)}
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                >
+                  Usar automatico ({formatCurrency(autoEstimatedAmount)})
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-slate-900">Compras reais nesta fatura</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    openCardDetails(cardId, monthValue);
+                    closeCardBillComparison();
+                  }}
+                  className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                >
+                  Ver no cartao
+                </button>
+              </div>
+              <div className="mt-3 space-y-2">
+                {realItems.length ? (
+                  realItems.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-900">{item.title}</p>
+                        <p className="truncate text-xs text-slate-500">{item.support}</p>
+                      </div>
+                      <p className="text-sm font-semibold text-slate-900">{formatCurrency(item.amount)}</p>
+                    </div>
+                  ))
+                ) : (
+                  <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+                    Nenhuma compra real entrou nessa fatura ainda.
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-6 py-5">
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${
+                isPaid ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+              }`}
+            >
+              {isPaid ? "Pago" : "Pendente"}
+            </span>
+            <button
+              type="button"
+              onClick={() => handleToggleCardBillPaid(cardId, monthValue)}
+              disabled={!isPaid && realAmount <= 0}
+              className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {isPaid ? "Desfazer pagamento" : "Marcar como pago"}
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -9891,7 +11108,7 @@ export function FinanceApp() {
                       transaction.cardMode === "credit" &&
                       getCardStatementMonthForTransaction(selectedCardDetail, transaction) === monthValue,
                   )
-                  .reduce((sum, transaction) => sum + transaction.amount, 0);
+                  .reduce((sum, transaction) => sum + getCreditCardTransactionSignedAmount(transaction), 0);
 
                 return (
                   <button
@@ -9948,7 +11165,7 @@ export function FinanceApp() {
                         </div>
                         <div className="text-right">
                           <p className="text-sm font-semibold text-slate-900">
-                            {formatCurrency(transaction.amount)}
+                            {formatCurrency(getCreditCardTransactionSignedAmount(transaction))}
                           </p>
                           <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
                             {transaction.status}
