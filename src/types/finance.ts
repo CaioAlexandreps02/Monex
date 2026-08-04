@@ -20,6 +20,7 @@ export type PaymentPlanMethod = "pix" | "cash" | "bank_transfer" | "card";
 export type CardMode = "credit" | "debit";
 export type BillStatus = "pending" | "paid" | "overdue";
 export type DebtStatus = "active" | "paused" | "settled";
+export type ImportTransport = "manual_upload" | "email_attachment" | "open_finance";
 export type BoardColumn =
   | "this_week"
   | "next_week"
@@ -311,8 +312,43 @@ export interface ImportedStatementMatch {
     | "bill"
     | "card_bill_payment";
   targetId: string;
+  targetLabel?: string;
   confidence: number;
   reason: string;
+}
+
+export interface ImportLearningRule {
+  id: string;
+  pattern: string;
+  sourceKind: "bank_account" | "credit_card" | "unknown";
+  suggestedCategoryId?: string;
+  suggestedTransactionType?: TransactionType;
+  paymentMethod?: PaymentMethod;
+  suggestedMatch?: ImportedStatementMatch;
+  supportCount: number;
+  mistakeCount: number;
+  status: "suggested" | "approved" | "disabled";
+  createdAt: string;
+  updatedAt: string;
+  lastAppliedAt?: string;
+}
+
+export interface ImportAutomationConfig {
+  id: string;
+  transport: Exclude<ImportTransport, "manual_upload">;
+  label: string;
+  status: "planned" | "needs_authorization" | "active" | "paused" | "disabled";
+  isEnabled: boolean;
+  provider?: string;
+  accountId?: string;
+  cardId?: string;
+  allowedSenders?: string[];
+  keywords?: string[];
+  externalConnectionId?: string;
+  processedExternalIds: string[];
+  authorizedAt?: string;
+  lastSyncAt?: string;
+  notes?: string;
 }
 
 export interface ImportedStatementBatch {
@@ -320,9 +356,12 @@ export interface ImportedStatementBatch {
   fileName: string;
   fileType: "csv" | "ofx";
   sourceKind: "bank_account" | "credit_card" | "unknown";
+  transport?: ImportTransport;
   sourceInstitution?: string;
   accountId?: string;
   cardId?: string;
+  externalSourceId?: string;
+  sourceLabel?: string;
   importedAt: string;
   periodStart?: string;
   periodEnd?: string;
@@ -342,12 +381,16 @@ export interface ImportedStatementItem {
   amount: number;
   direction: "inflow" | "outflow";
   sourceKind: "bank_account" | "credit_card" | "unknown";
+  transport?: ImportTransport;
   paymentMethod: PaymentMethod | "unknown";
   accountId?: string;
   cardId?: string;
+  externalItemId?: string;
+  originLabel?: string;
   suggestedCategoryId?: string;
   suggestedTransactionType?: TransactionType;
   suggestedMatch?: ImportedStatementMatch;
+  appliedLearningRuleId?: string;
   statementMonth?: string;
   confidence: number;
   status: "pending" | "confirmed" | "ignored" | "duplicate";

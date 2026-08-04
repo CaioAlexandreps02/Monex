@@ -263,10 +263,21 @@ Motivo: descricao parecida, mesmo cartao, valor compativel e mes esperado.
 Ao confirmar:
 
 - `ImportedStatementItem` vira `Transaction`.
-- `PlannedPurchase` recebe vinculo com a transacao real.
+- A `Transaction` recebe `linkedPlannedPurchaseId` quando o vinculo for uma compra planejada.
 - Status da compra planejada pode mudar para `bought`.
-- Parcelas futuras podem ser geradas ou acompanhadas conforme a regra do cartao.
+- Contas e itens fixos vinculados podem ser marcados como pagos/concluidos.
+- Pagamento de fatura pode marcar a fatura como paga sem virar compra de credito.
 - Fatura real passa a incluir a compra.
+
+### Status implementado em 2026-08-04
+
+- [x] A revisao de importados mostra o campo `Vinculo`.
+- [x] O sistema sugere match com `PlannedPurchase`, `Bill`, `FixedFlowEntry` e pagamento de fatura.
+- [x] O usuario pode trocar o vinculo para `Sem vinculo` antes de confirmar.
+- [x] Confirmar compra planejada marca a compra como `bought` e conecta a transacao via `linkedPlannedPurchaseId`.
+- [x] Confirmar conta/item fixo marca o planejamento como pago/concluido no mes.
+- [x] Confirmar pagamento de fatura cria uma saida de conta e marca `CardBillEstimate` como paga sem adicionar `cardId/cardMode` na transacao.
+- [ ] Parcelamentos importados ainda nao sao reconstruidos automaticamente quando o arquivo traz apenas a compra original agregada.
 
 ---
 
@@ -300,26 +311,18 @@ Se o usuario aprovar, vira uma regra automatica.
 ```typescript
 interface ImportLearningRule {
   id: string;
-  name: string;
-  patternKind: "contains" | "starts_with" | "exact" | "regex";
   pattern: string;
-  normalizedPattern: string;
-  sourceKind?: "bank_account" | "credit_card";
-  institution?: string;
-  accountId?: string;
-  cardId?: string;
-  categoryId?: string;
-  paymentMethod?: ImportedStatementItem["paymentMethod"];
-  transactionType?: "income" | "expense";
-  targetKind?: ImportedStatementMatch["kind"];
-  targetId?: string;
-  confidence: number;
+  sourceKind: "bank_account" | "credit_card" | "unknown";
+  suggestedCategoryId?: string;
+  suggestedTransactionType?: "income" | "expense";
+  paymentMethod?: "pix" | "cash" | "bank_transfer" | "credit_card" | "debit_card";
+  suggestedMatch?: ImportedStatementMatch;
   supportCount: number;
   mistakeCount: number;
-  autoApply: boolean;
-  requiresReviewAboveAmount?: number;
+  status: "suggested" | "approved" | "disabled";
   createdAt: string;
   updatedAt: string;
+  lastAppliedAt?: string;
 }
 ```
 
@@ -337,11 +340,19 @@ interface ImportLearningRule {
 | Situacao | Acao |
 |----------|------|
 | 1 ocorrencia | Apenas sugestao |
-| 2-3 ocorrencias iguais | Sugestao com destaque |
-| 4+ ocorrencias iguais | Perguntar se deseja criar regra |
-| Regra aprovada + valor baixo | Auto-aplicar |
-| Regra aprovada + valor alto | Aplicar, mas manter em revisao |
-| Usuario corrigiu regra 2 vezes | Desativar auto-aplicacao |
+| 2+ ocorrencias iguais | Liberar aprovacao manual da regra |
+| Regra aprovada | Aplicar categoria/metodo/tipo/vinculo em novos imports |
+| Usuario corrigiu regra aprovada | Aumentar `mistakeCount` |
+| Usuario corrigiu regra 3 vezes | Desativar auto-aplicacao |
+
+### Status implementado em 2026-08-04
+
+- [x] Confirmacoes criam ou reforcam `ImportLearningRule`.
+- [x] Regra com duas confirmacoes pode ser aprovada manualmente.
+- [x] Apenas regra aprovada autoaplica em novos itens importados.
+- [x] Se o usuario corrigir uma sugestao aplicada antes de confirmar, `mistakeCount` aumenta.
+- [x] Regra com 3 erros fica `disabled`.
+- [x] A tela `Aprendizado de importacao` mostra regras sugeridas, aprovadas e desativadas.
 
 ### O Que Pode Ser Automatizado
 
@@ -407,6 +418,14 @@ Observacao:
 - Mesmo com Open Finance, dados novos devem passar pelo pipeline de normalizacao, classificacao, deduplicacao e reconciliacao.
 - A diferenca e apenas a origem dos dados: em vez de arquivo, vem de API.
 
+Status implementado em 2026-08-04:
+
+- [x] Existe `ImportTransport` com `manual_upload`, `email_attachment` e `open_finance`.
+- [x] Existe `ImportAutomationConfig` para registrar provedor, status, conexao externa e IDs ja processados.
+- [x] Open Finance aparece na tela de `Origens automaticas`.
+- [x] O pipeline compartilhado consegue receber texto importado por API e criar `ImportedStatementBatch`.
+- [ ] A conexao real com provedor Open Finance ainda depende de autorizacao e credenciais externas.
+
 ### Email
 
 Registrar como direcao futura.
@@ -433,6 +452,14 @@ Regras de seguranca:
 - Nao apagar emails.
 - Nao enviar conteudo sensivel para terceiros sem consentimento.
 - Guardar historico de quais arquivos foram processados para evitar duplicidade.
+
+Status implementado em 2026-08-04:
+
+- [x] Email aparece na tela de `Origens automaticas`.
+- [x] Configuracao registra provedor, remetentes permitidos, palavras-chave e conexao externa futura.
+- [x] O pipeline compartilhado aceita origem `email_attachment` e preserva `externalSourceId`.
+- [x] Batch externo ja processado e bloqueado antes de criar novos itens.
+- [ ] A conexao real com Gmail/Outlook ainda depende de autorizacao do usuario e conector externo.
 
 ---
 
@@ -479,6 +506,14 @@ Regras de seguranca:
 - Open Finance: importar transacoes por API.
 - Manter o mesmo pipeline de revisao/reconciliacao.
 
+Status:
+
+- [x] Base de automacao de origem implementada.
+- [x] Configuracoes persistidas para Email e Open Finance.
+- [x] Pipeline unico de ingestao preparado.
+- [ ] Busca real em email ainda nao implementada.
+- [ ] Sincronizacao real Open Finance ainda nao implementada.
+
 ---
 
 ## Checklist de Validacao
@@ -491,7 +526,7 @@ Regras de seguranca:
 - [x] Duplicados nao criam transacoes repetidas.
 - [x] Extrato de cartao atualiza fatura real.
 - [x] Pagamento de fatura nao entra como compra de credito.
-- [ ] Compra importada pode ser vinculada a compra planejada.
+- [x] Compra importada pode ser vinculada a compra planejada.
 - [ ] Escolhas repetidas geram sugestao de regra.
 - [ ] Regra so auto-aplica depois de autorizacao.
 - [ ] Regra ruim pode ser corrigida/desativada.

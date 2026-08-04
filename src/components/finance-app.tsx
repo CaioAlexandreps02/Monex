@@ -51,6 +51,9 @@ import type {
   FinancePriority,
   FixedFlowEntry,
   FixedFlowSection,
+  ImportAutomationConfig,
+  ImportTransport,
+  ImportLearningRule,
   ImportedStatementBatch,
   ImportedStatementItem,
   Investment,
@@ -323,6 +326,14 @@ const paymentPlanLabels: Record<PaymentPlanMethod, string> = {
   card: "Cartao",
 };
 
+const importAutomationStatusLabels: Record<ImportAutomationConfig["status"], string> = {
+  planned: "Planejada",
+  needs_authorization: "Aguardando autorizacao",
+  active: "Ativa",
+  paused: "Pausada",
+  disabled: "Desativada",
+};
+
 function getCardGradient(color: string) {
   return {
     background: `linear-gradient(135deg, ${color} 0%, #1e293b 100%)`,
@@ -390,6 +401,30 @@ function getDefaultBoardColumnForPurchase(
 const initialMonth = getTodayMonthValue();
 const FINANCE_STORAGE_KEY = "monex-app-state-v1";
 const FINANCE_STORAGE_BACKUP_KEY = "monex-app-state-v1-backup";
+
+const initialImportAutomationConfigs: ImportAutomationConfig[] = [
+  {
+    id: "email-attachments",
+    transport: "email_attachment",
+    label: "Email",
+    status: "planned",
+    isEnabled: false,
+    allowedSenders: [],
+    keywords: ["extrato", "fatura"],
+    processedExternalIds: [],
+    notes: "Preparado para buscar anexos de extratos/faturas por email quando houver conector autorizado.",
+  },
+  {
+    id: "open-finance",
+    transport: "open_finance",
+    label: "Open Finance",
+    status: "planned",
+    isEnabled: false,
+    processedExternalIds: [],
+    notes: "Preparado para receber transacoes por API Open Finance mantendo revisao, deduplicacao e reconciliacao.",
+  },
+];
+
 type FinancePersistedState = {
   selectedMonth: string;
   accounts: Account[];
@@ -404,6 +439,8 @@ type FinancePersistedState = {
   cardBillEstimates: Record<string, CardBillEstimate>;
   importedStatementBatches: ImportedStatementBatch[];
   importedStatementItems: ImportedStatementItem[];
+  importLearningRules: ImportLearningRule[];
+  importAutomationConfigs: ImportAutomationConfig[];
   settings: Settings;
   monthlyPlansByMonth: Record<string, MonthlyPlan>;
 };
@@ -792,6 +829,43 @@ function buildImportFingerprint(date: string, amount: number, normalizedDescript
   return [date, amount.toFixed(2), normalizedDescription, sourceId].join(":");
 }
 
+function getImportPattern(normalizedDescription: string) {
+  const tokens = normalizedDescription
+    .replace(/[^A-Z0-9 ]/g, " ")
+    .split(" ")
+    .filter((token) => token.length >= 3 && !/^\d+$/.test(token));
+
+  return tokens.slice(0, 3).join(" ") || normalizedDescription.slice(0, 28);
+}
+
+function getImportSimilarity(left: string, right: string) {
+  const leftTokens = new Set(getImportPattern(left).split(" ").filter(Boolean));
+  const rightTokens = new Set(getImportPattern(right).split(" ").filter(Boolean));
+
+  if (!leftTokens.size || !rightTokens.size) {
+    return 0;
+  }
+
+  const shared = Array.from(leftTokens).filter((token) => rightTokens.has(token)).length;
+  return shared / Math.max(leftTokens.size, rightTokens.size);
+}
+
+function isAmountClose(left: number, right: number, tolerance = 0.08) {
+  if (left <= 0 || right <= 0) {
+    return false;
+  }
+
+  const difference = Math.abs(left - right);
+  return difference <= 2 || difference / Math.max(left, right) <= tolerance;
+}
+
+function splitAutomationList(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 const shortMonthFormatter = new Intl.DateTimeFormat("pt-BR", { month: "short" });
 
 function buildRelativeMonths(referenceDate: Date) {
@@ -1062,6 +1136,10 @@ export function FinanceApp() {
   const [cardBillEstimates, setCardBillEstimates] = useState<Record<string, CardBillEstimate>>({});
   const [importedStatementBatches, setImportedStatementBatches] = useState<ImportedStatementBatch[]>([]);
   const [importedStatementItems, setImportedStatementItems] = useState<ImportedStatementItem[]>([]);
+  const [importLearningRules, setImportLearningRules] = useState<ImportLearningRule[]>([]);
+  const [importAutomationConfigs, setImportAutomationConfigs] = useState<ImportAutomationConfig[]>(
+    initialImportAutomationConfigs,
+  );
   const [importSourceKind, setImportSourceKind] = useState<ImportedStatementBatch["sourceKind"]>("bank_account");
   const [importAccountId, setImportAccountId] = useState(settings.defaultAccountId);
   const [importCardId, setImportCardId] = useState(settings.defaultCardId);
@@ -1167,12 +1245,199 @@ export function FinanceApp() {
     return categories.find((category) => category.type === type && !isHiddenUiCategoryId(category.id))?.id ?? categories[0]?.id;
   }
 
+  function getImportMatchValue(match?: ImportedStatementItem["suggestedMatch"]) {
+    return match ? `${match.kind}:${match.targetId}` : "none";
+  }
+
+  function parseImportMatchValue(value: string): ImportedStatementItem["suggestedMatch"] | undefined {
+    if (value === "none") {
+      return undefined;
+    }
+
+    const [kind, ...targetParts] = value.split(":");
+    const targetId = targetParts.join(":");
+    if (!targetId) {
+      return undefined;
+    }
+
+    return {
+      kind: kind as NonNullable<ImportedStatementItem["suggestedMatch"]>["kind"],
+      targetId,
+      targetLabel: getImportMatchLabel(kind, targetId),
+      confidence: 0.86,
+      reason: "Vinculo escolhido manualmente na revisao.",
+    };
+  }
+
+  function getImportMatchLabel(kind: string, targetId: string) {
+    if (kind === "planned_purchase") {
+      return plannedPurchases.find((purchase) => purchase.id === targetId)?.name ?? "Compra planejada";
+    }
+
+    if (kind === "bill") {
+      return bills.find((bill) => bill.id === targetId)?.title ?? "Conta";
+    }
+
+    if (kind === "fixed_entry") {
+      return fixedEntries.find((entry) => entry.id === targetId)?.title ?? "Item fixo";
+    }
+
+    if (kind === "card_bill_payment") {
+      const [cardId, monthValue] = targetId.split("|");
+      const card = cards.find((current) => current.id === cardId);
+      return `Fatura ${card?.name ?? "cartao"} - ${formatMonthLabel(monthValueToDate(monthValue))}`;
+    }
+
+    return "Transacao existente";
+  }
+
+  function getImportMatchOptions(item: ImportedStatementItem) {
+    const itemMonth = item.date.slice(0, 7);
+    const options = [{ value: "none", label: "Sem vinculo" }];
+
+    activePlannedPurchases
+      .filter((purchase) => {
+        const plannedAmount = getPlannedPurchaseAmountByMonth(purchase)[itemMonth] ?? purchase.estimatedValue;
+        return item.direction === "outflow" && isAmountClose(item.amount, plannedAmount, 0.18);
+      })
+      .slice(0, 8)
+      .forEach((purchase) => {
+        options.push({ value: `planned_purchase:${purchase.id}`, label: `Compra planejada: ${purchase.name}` });
+      });
+
+    bills
+      .filter((bill) => bill.status !== "paid" && bill.dueDate.slice(0, 7) === itemMonth && isAmountClose(item.amount, bill.amount, 0.12))
+      .slice(0, 8)
+      .forEach((bill) => {
+        options.push({ value: `bill:${bill.id}`, label: `Conta: ${bill.title}` });
+      });
+
+    fixedEntries
+      .filter((entry) => (entry.amountByMonth[itemMonth] ?? 0) > 0 && isAmountClose(item.amount, entry.amountByMonth[itemMonth] ?? 0, 0.12))
+      .slice(0, 8)
+      .forEach((entry) => {
+        options.push({ value: `fixed_entry:${entry.id}`, label: `Planejamento: ${entry.title}` });
+      });
+
+    cards.forEach((card) => {
+      const cardBillAmount = getCardBillRealAmount(card.id, itemMonth);
+      const key = getCardBillEstimateKey(card.id, itemMonth);
+      if (
+        item.sourceKind !== "credit_card" &&
+        item.direction === "outflow" &&
+        cardBillAmount > 0 &&
+        cardBillEstimates[key]?.status !== "paid" &&
+        isAmountClose(item.amount, cardBillAmount, 0.04)
+      ) {
+        options.push({ value: `card_bill_payment:${card.id}|${itemMonth}`, label: `Pagamento de fatura: ${card.name}` });
+      }
+    });
+
+    return options;
+  }
+
+  function getSuggestedImportMatch(
+    normalizedDescription: string,
+    amount: number,
+    date: string,
+    direction: ImportedStatementItem["direction"],
+    sourceKind: ImportedStatementBatch["sourceKind"],
+  ): ImportedStatementItem["suggestedMatch"] {
+    const monthValue = date.slice(0, 7);
+    const candidates: NonNullable<ImportedStatementItem["suggestedMatch"]>[] = [];
+
+    if (direction === "outflow") {
+      activePlannedPurchases.forEach((purchase) => {
+        const plannedAmount = getPlannedPurchaseAmountByMonth(purchase)[monthValue] ?? purchase.estimatedValue;
+        const similarity = getImportSimilarity(normalizedDescription, normalizeImportedDescription(purchase.name));
+        if (isAmountClose(amount, plannedAmount, 0.18) && similarity >= 0.25) {
+          candidates.push({
+            kind: "planned_purchase",
+            targetId: purchase.id,
+            targetLabel: purchase.name,
+            confidence: Math.min(0.92, 0.45 + similarity * 0.35 + (isAmountClose(amount, plannedAmount, 0.04) ? 0.12 : 0)),
+            reason: "Descricao, valor e mes batem com uma compra planejada.",
+          });
+        }
+      });
+
+      bills.forEach((bill) => {
+        const similarity = getImportSimilarity(normalizedDescription, normalizeImportedDescription(bill.title));
+        if (bill.status !== "paid" && bill.dueDate.slice(0, 7) === monthValue && isAmountClose(amount, bill.amount, 0.12)) {
+          candidates.push({
+            kind: "bill",
+            targetId: bill.id,
+            targetLabel: bill.title,
+            confidence: Math.min(0.9, 0.5 + similarity * 0.3 + (isAmountClose(amount, bill.amount, 0.04) ? 0.1 : 0)),
+            reason: "Valor e vencimento batem com uma conta pendente.",
+          });
+        }
+      });
+
+      fixedEntries.forEach((entry) => {
+        const plannedAmount = entry.amountByMonth[monthValue] ?? 0;
+        const similarity = getImportSimilarity(normalizedDescription, normalizeImportedDescription(entry.title));
+        if (plannedAmount > 0 && isAmountClose(amount, plannedAmount, 0.12) && similarity >= 0.2) {
+          candidates.push({
+            kind: "fixed_entry",
+            targetId: entry.id,
+            targetLabel: entry.title,
+            confidence: Math.min(0.88, 0.44 + similarity * 0.3 + (isAmountClose(amount, plannedAmount, 0.04) ? 0.1 : 0)),
+            reason: "Lancamento parece ser a realizacao de um item da planilha.",
+          });
+        }
+      });
+
+      if (sourceKind !== "credit_card") {
+        cards.forEach((card) => {
+          const cardBillAmount = getCardBillRealAmount(card.id, monthValue);
+          const key = getCardBillEstimateKey(card.id, monthValue);
+          if (
+            cardBillAmount > 0 &&
+            cardBillEstimates[key]?.status !== "paid" &&
+            isAmountClose(amount, cardBillAmount, 0.04) &&
+            (normalizedDescription.includes("FATURA") ||
+              normalizedDescription.includes("CARTAO") ||
+              normalizedDescription.includes(card.issuer.toUpperCase()))
+          ) {
+            candidates.push({
+              kind: "card_bill_payment",
+              targetId: `${card.id}|${monthValue}`,
+              targetLabel: `Fatura ${card.name}`,
+              confidence: 0.94,
+              reason: "Valor e descricao parecem pagamento de fatura.",
+            });
+          }
+        });
+      }
+    }
+
+    return candidates.sort((left, right) => right.confidence - left.confidence)[0];
+  }
+
+  function getApprovedImportLearningRule(
+    normalizedDescription: string,
+    sourceKind: ImportedStatementBatch["sourceKind"],
+  ) {
+    return importLearningRules
+      .filter((rule) => rule.status === "approved" && rule.sourceKind === sourceKind)
+      .filter((rule) => normalizedDescription.includes(rule.pattern))
+      .sort((left, right) => right.supportCount - left.supportCount)[0];
+  }
+
   function buildImportedItem(
     batchId: string,
     rawDescription: string,
     date: string,
     signedAmount: number,
     sourceKind: ImportedStatementBatch["sourceKind"],
+    options?: {
+      transport?: ImportTransport;
+      accountId?: string;
+      cardId?: string;
+      externalItemId?: string;
+      originLabel?: string;
+    },
   ): ImportedStatementItem | null {
     if (!date || !rawDescription || signedAmount === 0) {
       return null;
@@ -1191,11 +1456,15 @@ export function FinanceApp() {
     const amount = Math.abs(Number(signedAmount.toFixed(2)));
     const transactionType: Transaction["type"] = direction === "inflow" ? "income" : "expense";
     const paymentMethod = detectImportPaymentMethod(normalizedDescription, sourceKind);
-    const accountId = sourceKind === "credit_card" ? undefined : importAccountId;
-    const cardId = sourceKind === "credit_card" ? importCardId : undefined;
+    const accountId = sourceKind === "credit_card" ? undefined : options?.accountId ?? importAccountId;
+    const cardId = sourceKind === "credit_card" ? options?.cardId ?? importCardId : undefined;
     const importCard = cardId ? cards.find((card) => card.id === cardId) : undefined;
     const statementMonth =
       sourceKind === "credit_card" ? getSuggestedCardStatementMonth(importCard, date, date.slice(0, 7)) : undefined;
+    const learningRule = getApprovedImportLearningRule(normalizedDescription, sourceKind);
+    const suggestedMatch =
+      learningRule?.suggestedMatch ??
+      getSuggestedImportMatch(normalizedDescription, amount, date, direction, sourceKind);
     const sourceId = accountId ?? cardId ?? sourceKind;
     const fingerprint = buildImportFingerprint(date, amount, normalizedDescription, sourceId);
     const hasExistingTransaction = transactions.some(
@@ -1218,13 +1487,18 @@ export function FinanceApp() {
       amount,
       direction,
       sourceKind,
-      paymentMethod,
+      transport: options?.transport ?? "manual_upload",
+      paymentMethod: learningRule?.paymentMethod ?? paymentMethod,
       accountId,
       cardId,
-      suggestedCategoryId: getSuggestedImportCategoryId(normalizedDescription, transactionType),
-      suggestedTransactionType: transactionType,
+      externalItemId: options?.externalItemId,
+      originLabel: options?.originLabel,
+      suggestedCategoryId:
+        learningRule?.suggestedCategoryId ?? getSuggestedImportCategoryId(normalizedDescription, transactionType),
+      suggestedTransactionType: learningRule?.suggestedTransactionType ?? transactionType,
       statementMonth,
-      confidence: hasExistingTransaction || hasExistingImport ? 0.98 : 0.62,
+      appliedLearningRuleId: learningRule?.id,
+      confidence: hasExistingTransaction || hasExistingImport ? 0.98 : learningRule ? 0.86 : suggestedMatch?.confidence ?? 0.62,
       status: hasExistingTransaction || hasExistingImport ? "duplicate" : "pending",
       fingerprint,
       suggestedMatch: hasExistingTransaction
@@ -1234,7 +1508,7 @@ export function FinanceApp() {
             confidence: 0.98,
             reason: "Data, valor, descricao e origem ja existem no historico.",
           }
-        : undefined,
+        : suggestedMatch,
     };
   }
 
@@ -1243,6 +1517,13 @@ export function FinanceApp() {
     batchId: string,
     fileName: string,
     sourceKind: ImportedStatementBatch["sourceKind"],
+    options?: {
+      transport?: ImportTransport;
+      originLabel?: string;
+      externalSourceId?: string;
+      accountId?: string;
+      cardId?: string;
+    },
   ) {
     const lowerFileName = fileName.toLowerCase();
     if (lowerFileName.endsWith(".ofx") || text.includes("<OFX")) {
@@ -1255,7 +1536,13 @@ export function FinanceApp() {
             block.match(/<MEMO>([^\r\n<]+)/i)?.[1] ??
             block.match(/<NAME>([^\r\n<]+)/i)?.[1] ??
             "Lancamento OFX";
-          return buildImportedItem(batchId, description, date, amount, sourceKind);
+          return buildImportedItem(batchId, description, date, amount, sourceKind, {
+            transport: options?.transport,
+            accountId: options?.accountId,
+            cardId: options?.cardId,
+            externalItemId: options?.externalSourceId ? `${options.externalSourceId}:${date}:${amount}:${description}` : undefined,
+            originLabel: options?.originLabel,
+          });
         })
         .filter((item): item is ImportedStatementItem => Boolean(item));
     }
@@ -1290,6 +1577,13 @@ export function FinanceApp() {
           parseImportDate(columns[inferredDateIndex] ?? ""),
           parseImportAmount(columns[inferredAmountIndex] ?? ""),
           sourceKind,
+          {
+            transport: options?.transport,
+            accountId: options?.accountId,
+            cardId: options?.cardId,
+            externalItemId: options?.externalSourceId ? `${options.externalSourceId}:${line}` : undefined,
+            originLabel: options?.originLabel,
+          },
         );
       })
       .filter((item): item is ImportedStatementItem => Boolean(item));
@@ -1324,6 +1618,88 @@ export function FinanceApp() {
     );
   }
 
+  function createImportedStatementBatchFromText({
+    text,
+    fileName,
+    sourceKind,
+    accountId,
+    cardId,
+    transport,
+    externalSourceId,
+    sourceLabel,
+  }: {
+    text: string;
+    fileName: string;
+    sourceKind: ImportedStatementBatch["sourceKind"];
+    accountId?: string;
+    cardId?: string;
+    transport: ImportTransport;
+    externalSourceId?: string;
+    sourceLabel?: string;
+  }) {
+    if (externalSourceId && importedStatementBatches.some((batch) => batch.externalSourceId === externalSourceId)) {
+      setImportError("Essa origem externa ja foi processada e foi bloqueada para evitar duplicidade.");
+      return;
+    }
+
+    const batchId = crypto.randomUUID();
+    const parsedItems = parseImportedStatement(text, batchId, fileName, sourceKind, {
+      transport,
+      externalSourceId,
+      originLabel: sourceLabel,
+      accountId,
+      cardId,
+    }).map((item) => ({
+      ...item,
+      accountId: sourceKind === "credit_card" ? undefined : accountId,
+      cardId: sourceKind === "credit_card" ? cardId : undefined,
+      originLabel: sourceLabel,
+    }));
+
+    if (!parsedItems.length) {
+      setImportError("Nao foi possivel encontrar lancamentos nessa origem.");
+      return;
+    }
+
+    const dates = parsedItems.map((item) => item.date).sort((left, right) => left.localeCompare(right));
+    const batch: ImportedStatementBatch = {
+      id: batchId,
+      fileName,
+      fileType: fileName.toLowerCase().endsWith(".ofx") ? "ofx" : "csv",
+      sourceKind,
+      transport,
+      accountId: sourceKind === "credit_card" ? undefined : accountId,
+      cardId: sourceKind === "credit_card" ? cardId : undefined,
+      externalSourceId,
+      sourceLabel,
+      importedAt: new Date().toISOString(),
+      periodStart: dates[0],
+      periodEnd: dates.at(-1),
+      status: parsedItems.every((item) => item.status === "duplicate") ? "confirmed" : "pending_review",
+      itemCount: parsedItems.length,
+      confirmedCount: 0,
+      ignoredCount: 0,
+      duplicateCount: parsedItems.filter((item) => item.status === "duplicate").length,
+    };
+
+    setImportedStatementBatches((current) => [batch, ...current]);
+    setImportedStatementItems((current) => [...parsedItems, ...current]);
+
+    if (externalSourceId && transport !== "manual_upload") {
+      setImportAutomationConfigs((current) =>
+        current.map((config) =>
+          config.transport === transport
+            ? {
+                ...config,
+                processedExternalIds: Array.from(new Set([...config.processedExternalIds, externalSourceId])),
+                lastSyncAt: new Date().toISOString(),
+              }
+            : config,
+        ),
+      );
+    }
+  }
+
   async function handleImportStatementFile(file: File | null) {
     if (!file) {
       return;
@@ -1333,37 +1709,198 @@ export function FinanceApp() {
 
     try {
       const text = await file.text();
-      const batchId = crypto.randomUUID();
-      const parsedItems = parseImportedStatement(text, batchId, file.name, importSourceKind);
-
-      if (!parsedItems.length) {
-        setImportError("Nao foi possivel encontrar lancamentos nesse arquivo.");
-        return;
-      }
-
-      const dates = parsedItems.map((item) => item.date).sort((left, right) => left.localeCompare(right));
-      const batch: ImportedStatementBatch = {
-        id: batchId,
+      createImportedStatementBatchFromText({
+        text,
         fileName: file.name,
-        fileType: file.name.toLowerCase().endsWith(".ofx") ? "ofx" : "csv",
         sourceKind: importSourceKind,
         accountId: importSourceKind === "credit_card" ? undefined : importAccountId,
         cardId: importSourceKind === "credit_card" ? importCardId : undefined,
-        importedAt: new Date().toISOString(),
-        periodStart: dates[0],
-        periodEnd: dates.at(-1),
-        status: parsedItems.every((item) => item.status === "duplicate") ? "confirmed" : "pending_review",
-        itemCount: parsedItems.length,
-        confirmedCount: 0,
-        ignoredCount: 0,
-        duplicateCount: parsedItems.filter((item) => item.status === "duplicate").length,
-      };
-
-      setImportedStatementBatches((current) => [batch, ...current]);
-      setImportedStatementItems((current) => [...parsedItems, ...current]);
+        transport: "manual_upload",
+        sourceLabel: "Upload manual",
+      });
     } catch {
       setImportError("Nao foi possivel ler o arquivo selecionado.");
     }
+  }
+
+  function registerImportLearningChoice(
+    item: ImportedStatementItem,
+    nextTransaction: Transaction,
+    match?: ImportedStatementItem["suggestedMatch"],
+  ) {
+    const pattern = getImportPattern(item.normalizedDescription);
+    if (!pattern) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+
+    setImportLearningRules((current) => {
+      const existing = current.find((rule) => rule.pattern === pattern && rule.sourceKind === item.sourceKind);
+      if (!existing) {
+        return [
+          {
+            id: crypto.randomUUID(),
+            pattern,
+            sourceKind: item.sourceKind,
+            suggestedCategoryId: nextTransaction.categoryId,
+            suggestedTransactionType: nextTransaction.type,
+            paymentMethod: nextTransaction.paymentMethod,
+            suggestedMatch: match,
+            supportCount: 1,
+            mistakeCount: 0,
+            status: "suggested",
+            createdAt: now,
+            updatedAt: now,
+          },
+          ...current,
+        ];
+      }
+
+      return current.map((rule) =>
+        rule.id === existing.id
+          ? (() => {
+              const isCorrection =
+                item.appliedLearningRuleId === rule.id &&
+                (rule.suggestedCategoryId !== nextTransaction.categoryId ||
+                  rule.suggestedTransactionType !== nextTransaction.type ||
+                  rule.paymentMethod !== nextTransaction.paymentMethod ||
+                  getImportMatchValue(rule.suggestedMatch) !== getImportMatchValue(match));
+              const nextMistakeCount = isCorrection ? rule.mistakeCount + 1 : rule.mistakeCount;
+
+              return {
+              ...rule,
+              suggestedCategoryId: nextTransaction.categoryId,
+              suggestedTransactionType: nextTransaction.type,
+              paymentMethod: nextTransaction.paymentMethod,
+              suggestedMatch: match,
+              supportCount: rule.supportCount + 1,
+                mistakeCount: nextMistakeCount,
+                status: nextMistakeCount >= 3 ? "disabled" : rule.status,
+              updatedAt: now,
+                lastAppliedAt: item.appliedLearningRuleId === rule.id ? now : rule.lastAppliedAt,
+              };
+            })()
+          : rule,
+      );
+    });
+  }
+
+  function applyImportedItemMatch(item: ImportedStatementItem, nextTransaction: Transaction) {
+    const match = item.suggestedMatch;
+    if (!match) {
+      return;
+    }
+
+    const itemMonth = item.date.slice(0, 7);
+
+    if (match.kind === "planned_purchase") {
+      setPlannedPurchases((current) =>
+        current.map((purchase) =>
+          purchase.id === match.targetId
+            ? {
+                ...purchase,
+                status: "bought",
+                boardColumn: "bought",
+                savedAmount: Math.max(purchase.savedAmount, nextTransaction.amount),
+                notes: purchase.notes
+                  ? `${purchase.notes}\nRealizado via importacao em ${formatShortDate(item.date)}.`
+                  : `Realizado via importacao em ${formatShortDate(item.date)}.`,
+              }
+            : purchase,
+        ),
+      );
+      return;
+    }
+
+    if (match.kind === "bill") {
+      setBills((current) =>
+        current.map((bill) =>
+          bill.id === match.targetId
+            ? { ...bill, amount: nextTransaction.amount, dueDate: item.date, status: "paid" }
+            : bill,
+        ),
+      );
+      return;
+    }
+
+    if (match.kind === "fixed_entry") {
+      const fixedEntry = fixedEntries.find((entry) => entry.id === match.targetId);
+      setFixedEntries((current) =>
+        current.map((entry) =>
+          entry.id === match.targetId
+            ? {
+                ...entry,
+                amountByMonth: { ...entry.amountByMonth, [itemMonth]: nextTransaction.amount },
+                completedMonths: Array.from(new Set([...entry.completedMonths, itemMonth])),
+              }
+            : entry,
+        ),
+      );
+
+      if (fixedEntry?.linkedBillGroupId) {
+        setBills((current) =>
+          current.map((bill) =>
+            (bill.recurringGroupId ?? bill.id) === fixedEntry.linkedBillGroupId && bill.dueDate.slice(0, 7) === itemMonth
+              ? { ...bill, amount: nextTransaction.amount, dueDate: item.date, status: "paid" }
+              : bill,
+          ),
+        );
+      }
+      return;
+    }
+
+    if (match.kind === "card_bill_payment") {
+      const [cardId, monthValue] = match.targetId.split("|");
+      const key = getCardBillEstimateKey(cardId, monthValue);
+      setCardBillEstimates((current) => ({
+        ...current,
+        [key]: {
+          cardId,
+          monthValue,
+          estimatedAmount: current[key]?.estimatedAmount ?? getCardBillGridAmount(cardId, monthValue),
+          isAutoEstimate: current[key]?.isAutoEstimate ?? true,
+          status: "paid",
+          paidTransactionId: nextTransaction.id,
+        },
+      }));
+    }
+  }
+
+  function handleApproveImportLearningRule(ruleId: string) {
+    const now = new Date().toISOString();
+    setImportLearningRules((current) =>
+      current.map((rule) =>
+        rule.id === ruleId ? { ...rule, status: "approved", mistakeCount: 0, updatedAt: now } : rule,
+      ),
+    );
+  }
+
+  function handleDisableImportLearningRule(ruleId: string) {
+    const now = new Date().toISOString();
+    setImportLearningRules((current) =>
+      current.map((rule) => (rule.id === ruleId ? { ...rule, status: "disabled", updatedAt: now } : rule)),
+    );
+  }
+
+  function handleUpdateImportAutomationConfig(
+    configId: string,
+    patch: Partial<ImportAutomationConfig>,
+  ) {
+    setImportAutomationConfigs((current) =>
+      current.map((config) =>
+        config.id === configId
+          ? {
+              ...config,
+              ...patch,
+              status:
+                patch.isEnabled === true && !config.authorizedAt
+                  ? "needs_authorization"
+                  : patch.status ?? config.status,
+            }
+          : config,
+      ),
+    );
   }
 
   function handleConfirmImportedItem(itemId: string) {
@@ -1387,6 +1924,25 @@ export function FinanceApp() {
           ? "credit_card"
           : "pix"
         : item.paymentMethod;
+    const matchedFixedEntry =
+      item.suggestedMatch?.kind === "fixed_entry"
+        ? fixedEntries.find((entry) => entry.id === item.suggestedMatch?.targetId)
+        : undefined;
+    const matchedFixedBill =
+      matchedFixedEntry?.linkedBillGroupId
+        ? bills.find(
+            (bill) =>
+              (bill.recurringGroupId ?? bill.id) === matchedFixedEntry.linkedBillGroupId &&
+              bill.dueDate.slice(0, 7) === item.date.slice(0, 7),
+          )
+        : undefined;
+    const sourceBillId =
+      item.suggestedMatch?.kind === "bill"
+        ? item.suggestedMatch.targetId
+        : matchedFixedBill?.id;
+    const linkedPlannedPurchaseId =
+      item.suggestedMatch?.kind === "planned_purchase" ? item.suggestedMatch.targetId : undefined;
+    const isCardBillPayment = item.suggestedMatch?.kind === "card_bill_payment";
     const nextTransaction: Transaction = {
       id: crypto.randomUUID(),
       title: item.rawDescription,
@@ -1398,14 +1954,25 @@ export function FinanceApp() {
       paymentMethod,
       status: item.direction === "inflow" ? "received" : "paid",
       incomeKind: item.direction === "inflow" ? "variable" : undefined,
-      expenseKind: item.direction === "outflow" ? "variable" : undefined,
+      expenseKind:
+        item.direction === "outflow"
+          ? linkedPlannedPurchaseId
+            ? "planned_purchase"
+            : sourceBillId || isCardBillPayment
+              ? "basic_bill"
+              : "variable"
+          : undefined,
       accountId: item.accountId ?? settings.defaultAccountId,
-      cardId: paymentMethod === "credit_card" || paymentMethod === "debit_card" ? item.cardId : undefined,
-      cardMode: paymentMethod === "credit_card" ? "credit" : paymentMethod === "debit_card" ? "debit" : undefined,
-      description: `IMPORT:${item.batchId}:${item.id}`,
+      cardId: !isCardBillPayment && (paymentMethod === "credit_card" || paymentMethod === "debit_card") ? item.cardId : undefined,
+      cardMode: !isCardBillPayment && paymentMethod === "credit_card" ? "credit" : !isCardBillPayment && paymentMethod === "debit_card" ? "debit" : undefined,
+      sourceBillId,
+      linkedPlannedPurchaseId,
+      description: `IMPORT:${item.batchId}:${item.id}${item.suggestedMatch ? `;MATCH:${item.suggestedMatch.kind}:${item.suggestedMatch.targetId}` : ""}`,
     };
 
     setTransactions((current) => [nextTransaction, ...current].sort((left, right) => right.date.localeCompare(left.date)));
+    applyImportedItemMatch(item, nextTransaction);
+    registerImportLearningChoice(item, nextTransaction, item.suggestedMatch);
     setImportedStatementItems((current) => {
       const nextItems = current.map((currentItem) =>
         currentItem.id === itemId
@@ -1449,6 +2016,8 @@ export function FinanceApp() {
       cardBillEstimates,
       importedStatementBatches,
       importedStatementItems,
+      importLearningRules,
+      importAutomationConfigs,
       settings,
       monthlyPlansByMonth,
     }),
@@ -1466,6 +2035,8 @@ export function FinanceApp() {
       cardBillEstimates,
       importedStatementBatches,
       importedStatementItems,
+      importLearningRules,
+      importAutomationConfigs,
       settings,
       monthlyPlansByMonth,
     ],
@@ -1550,6 +2121,15 @@ export function FinanceApp() {
     if (persisted.cardBillEstimates) setCardBillEstimates(persisted.cardBillEstimates);
     if (persisted.importedStatementBatches) setImportedStatementBatches(persisted.importedStatementBatches);
     if (persisted.importedStatementItems) setImportedStatementItems(persisted.importedStatementItems);
+    if (persisted.importLearningRules) setImportLearningRules(persisted.importLearningRules);
+    if (persisted.importAutomationConfigs) {
+      setImportAutomationConfigs([
+        ...persisted.importAutomationConfigs,
+        ...initialImportAutomationConfigs.filter(
+          (config) => !persisted.importAutomationConfigs?.some((saved) => saved.id === config.id),
+        ),
+      ]);
+    }
     if (persisted.settings) setSettings({
       ...seedSettings,
       ...persisted.settings,
@@ -6812,11 +7392,147 @@ export function FinanceApp() {
           </div>
         </Panel>
 
+        <Panel title="Origens automaticas" description="Email e Open Finance ficam configurados para usar o mesmo fluxo de importacao quando houver autorizacao.">
+          <div className="grid gap-3 lg:grid-cols-2">
+            {importAutomationConfigs.map((config) => (
+              <div key={config.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold text-slate-900">{config.label}</p>
+                      <span
+                        className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                          config.status === "active"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : config.status === "disabled"
+                              ? "bg-slate-100 text-slate-500"
+                              : "bg-sky-100 text-sky-700"
+                        }`}
+                      >
+                        {importAutomationStatusLabels[config.status]}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {config.processedExternalIds.length} origens processadas
+                      {config.lastSyncAt ? ` - ultima sincronizacao ${formatShortDate(config.lastSyncAt.slice(0, 10))}` : ""}
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={config.isEnabled}
+                      onChange={(event) =>
+                        handleUpdateImportAutomationConfig(config.id, {
+                          isEnabled: event.target.checked,
+                          status: event.target.checked ? "needs_authorization" : "paused",
+                        })
+                      }
+                      className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+                    />
+                    Preparar
+                  </label>
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <FormField label="Provedor">
+                    <input
+                      value={config.provider ?? ""}
+                      onChange={(event) => handleUpdateImportAutomationConfig(config.id, { provider: event.target.value })}
+                      placeholder={config.transport === "email_attachment" ? "Gmail, Outlook..." : "Pluggy, Belvo..."}
+                      className="field bg-white"
+                    />
+                  </FormField>
+                  <FormField label="Conexao externa">
+                    <input
+                      value={config.externalConnectionId ?? ""}
+                      onChange={(event) =>
+                        handleUpdateImportAutomationConfig(config.id, { externalConnectionId: event.target.value })
+                      }
+                      placeholder="ID futuro do conector"
+                      className="field bg-white"
+                    />
+                  </FormField>
+                </div>
+
+                {config.transport === "email_attachment" ? (
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <FormField label="Remetentes">
+                      <input
+                        value={(config.allowedSenders ?? []).join(", ")}
+                        onChange={(event) =>
+                          handleUpdateImportAutomationConfig(config.id, {
+                            allowedSenders: splitAutomationList(event.target.value),
+                          })
+                        }
+                        placeholder="banco@email.com"
+                        className="field bg-white"
+                      />
+                    </FormField>
+                    <FormField label="Palavras-chave">
+                      <input
+                        value={(config.keywords ?? []).join(", ")}
+                        onChange={(event) =>
+                          handleUpdateImportAutomationConfig(config.id, {
+                            keywords: splitAutomationList(event.target.value),
+                          })
+                        }
+                        placeholder="extrato, fatura"
+                        className="field bg-white"
+                      />
+                    </FormField>
+                  </div>
+                ) : null}
+
+                <FormField label="Notas">
+                  <textarea
+                    value={config.notes ?? ""}
+                    onChange={(event) => handleUpdateImportAutomationConfig(config.id, { notes: event.target.value })}
+                    rows={3}
+                    className="field min-h-20 bg-white"
+                  />
+                </FormField>
+
+                <div className="mt-4 flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleUpdateImportAutomationConfig(config.id, {
+                        status: config.isEnabled ? "needs_authorization" : "planned",
+                      })
+                    }
+                    className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Registrar plano
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleUpdateImportAutomationConfig(config.id, { status: "disabled", isEnabled: false })}
+                    className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Desativar
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
         <Panel title="Revisao dos lancamentos" description="Confirme somente o que deve entrar no historico real.">
           <div className="space-y-3">
             {reviewItems.length ? (
               reviewItems.map((item) => {
                 const transactionType = item.suggestedTransactionType ?? (item.direction === "inflow" ? "income" : "expense");
+                const importMatchOptions = getImportMatchOptions(item);
+                const selectedMatchValue = getImportMatchValue(item.suggestedMatch);
+                const matchOptions = importMatchOptions.some((option) => option.value === selectedMatchValue)
+                  ? importMatchOptions
+                  : [
+                      ...importMatchOptions,
+                      {
+                        value: selectedMatchValue,
+                        label: item.suggestedMatch?.targetLabel ?? item.suggestedMatch?.reason ?? "Vinculo sugerido",
+                      },
+                    ];
 
                 return (
                   <div
@@ -6845,11 +7561,21 @@ export function FinanceApp() {
                             Vai para a fatura de {formatMonthLabel(monthValueToDate(item.statementMonth))}
                           </p>
                         ) : null}
+                        {item.suggestedMatch ? (
+                          <p className="mt-2 text-xs font-medium text-emerald-700">
+                            Sugestao: {item.suggestedMatch.targetLabel ?? getImportMatchLabel(item.suggestedMatch.kind, item.suggestedMatch.targetId)} - {item.suggestedMatch.reason}
+                          </p>
+                        ) : null}
+                        {item.appliedLearningRuleId ? (
+                          <p className="mt-1 text-xs font-medium text-violet-700">
+                            Regra aprendida aplicada.
+                          </p>
+                        ) : null}
                       </div>
                       <p className="text-lg font-semibold text-slate-900">{formatCurrency(item.amount)}</p>
                     </div>
 
-                    <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    <div className="mt-4 grid gap-3 md:grid-cols-4">
                       <FormField label="Categoria">
                         <CustomSelect
                           value={item.suggestedCategoryId ?? ""}
@@ -6903,6 +7629,21 @@ export function FinanceApp() {
                           ]}
                         />
                       </FormField>
+                      <FormField label="Vinculo">
+                        <CustomSelect
+                          value={selectedMatchValue}
+                          onChange={(value) =>
+                            setImportedStatementItems((current) =>
+                              current.map((currentItem) =>
+                                currentItem.id === item.id
+                                  ? { ...currentItem, suggestedMatch: parseImportMatchValue(value) }
+                                  : currentItem,
+                              ),
+                            )
+                          }
+                          options={matchOptions}
+                        />
+                      </FormField>
                     </div>
 
                     <div className="mt-4 flex flex-wrap justify-end gap-2">
@@ -6928,6 +7669,80 @@ export function FinanceApp() {
             ) : (
               <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
                 Nenhum item pendente. Importe um arquivo para iniciar a revisao.
+              </div>
+            )}
+          </div>
+        </Panel>
+
+        <Panel title="Aprendizado de importacao" description="Regras so aplicam automaticamente depois de aprovadas.">
+          <div className="space-y-3">
+            {importLearningRules.length ? (
+              importLearningRules
+                .slice()
+                .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+                .map((rule) => {
+                  const category = categories.find((item) => item.id === rule.suggestedCategoryId);
+                  const canApprove = rule.status === "suggested" && rule.supportCount >= 2;
+
+                  return (
+                    <div key={rule.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold text-slate-900">{rule.pattern}</p>
+                            <span
+                              className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                rule.status === "approved"
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : rule.status === "disabled"
+                                    ? "bg-slate-100 text-slate-500"
+                                    : "bg-amber-100 text-amber-700"
+                              }`}
+                            >
+                              {rule.status === "approved" ? "Aprovada" : rule.status === "disabled" ? "Desativada" : "Sugerida"}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {rule.sourceKind === "credit_card" ? "Cartao" : "Conta"} - {rule.supportCount} confirmacoes - {rule.mistakeCount} correcoes
+                          </p>
+                          <p className="mt-2 text-xs text-slate-600">
+                            Sugere {category?.name ?? "categoria atual"}, {rule.suggestedTransactionType === "income" ? "receita" : "despesa"} e {paymentLabels[rule.paymentMethod ?? "pix"]}.
+                            {rule.suggestedMatch ? ` Vinculo: ${rule.suggestedMatch.targetLabel ?? rule.suggestedMatch.reason}.` : ""}
+                          </p>
+                          {rule.status === "suggested" && !canApprove ? (
+                            <p className="mt-2 text-xs font-medium text-amber-700">
+                              Precisa de mais uma confirmacao parecida para liberar aprovacao.
+                            </p>
+                          ) : null}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {rule.status !== "approved" ? (
+                            <button
+                              type="button"
+                              onClick={() => handleApproveImportLearningRule(rule.id)}
+                              disabled={!canApprove && rule.supportCount < 2}
+                              className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                            >
+                              Aprovar
+                            </button>
+                          ) : null}
+                          {rule.status !== "disabled" ? (
+                            <button
+                              type="button"
+                              onClick={() => handleDisableImportLearningRule(rule.id)}
+                              className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                            >
+                              Desativar
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                As regras aparecem aqui depois que voce confirma lancamentos parecidos.
               </div>
             )}
           </div>

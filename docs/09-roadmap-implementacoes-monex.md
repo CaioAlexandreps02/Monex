@@ -100,7 +100,7 @@ Resumo verificado:
 - `[x]` Existe modal de comparacao de fatura via `renderCardBillComparisonModal()`.
 - `[x]` Existe `handleToggleCardBillPaid`.
 - `[x]` Existe importacao de extratos (`ImportedStatementBatch`, `ImportedStatementItem`, CSV/OFX, revisao).
-- `[ ]` Nao existe aprendizado por regras (`ImportLearningRule`).
+- `[x]` Existe aprendizado por regras (`ImportLearningRule`) com aprovacao manual antes de autoaplicar.
 
 Validacao tecnica:
 
@@ -451,15 +451,15 @@ Implementar:
 
 Checklist:
 
-- [ ] Sistema sugere compra planejada parecida.
-- [ ] Usuario confirma ou rejeita match.
-- [ ] Compra planejada vinculada vira realizada.
-- [ ] Transacao real fica conectada ao planejamento.
-- [ ] Planejado vs real fica rastreavel.
+- [x] Sistema sugere compra planejada parecida.
+- [x] Usuario confirma ou rejeita match.
+- [x] Compra planejada vinculada vira realizada.
+- [x] Transacao real fica conectada ao planejamento.
+- [x] Planejado vs real fica rastreavel.
 
 Status verificado:
 
-- Pendente. Nao existe reconciliacao de importados com planejamento.
+- Feito. A revisao de importados agora mostra um campo `Vinculo`, sugere matches com `PlannedPurchase`, `Bill`, `FixedFlowEntry` e pagamento de fatura, e aplica o efeito ao confirmar: compra planejada vira realizada, conta/item fixo fica pago/concluido e pagamento de fatura marca a estimativa como paga sem entrar como compra do proprio cartao.
 
 ---
 
@@ -483,15 +483,15 @@ Regra de seguranca:
 
 Checklist:
 
-- [ ] Escolhas repetidas geram sugestao.
-- [ ] Usuario aprova regra.
-- [ ] Regra aplica sozinha em novo import.
-- [ ] Usuario pode corrigir regra.
-- [ ] Regra ruim deixa de auto-aplicar.
+- [x] Escolhas repetidas geram sugestao.
+- [x] Usuario aprova regra.
+- [x] Regra aplica sozinha em novo import.
+- [x] Usuario pode corrigir regra.
+- [x] Regra ruim deixa de auto-aplicar.
 
 Status verificado:
 
-- Pendente. Nao existe `ImportLearningRule` nem mecanismo de aprendizado.
+- Feito. Existe `ImportLearningRule`, persistida junto do estado. Confirmacoes criam ou reforcam regras sugeridas por padrao de descricao; regras so autoaplicam depois de aprovadas; correcoes em sugestoes aplicadas aumentam `mistakeCount`, e a regra e desativada ao acumular 3 erros.
 
 ---
 
@@ -499,7 +499,7 @@ Status verificado:
 
 Referencia: [08 — Integracoes Futuras](./08-importacao-extratos-e-reconciliacao.md#integracoes-futuras)
 
-Nao implementar agora. Apenas manter planejado.
+Implementar base segura, sem conectar credenciais reais ainda.
 
 #### Email
 
@@ -520,10 +520,15 @@ Objetivo futuro:
 
 Checklist futuro:
 
-- [ ] Autorizacao explicita.
-- [ ] Controle de origem dos dados.
-- [ ] Evitar duplicidade entre email, upload manual e Open Finance.
-- [ ] Mesmo pipeline para todas as origens.
+- [x] Autorizacao explicita registrada no modelo antes de ativar origem automatica.
+- [x] Controle de origem dos dados via `ImportTransport`, `externalSourceId` e `sourceLabel`.
+- [x] Evitar duplicidade entre email, upload manual e Open Finance por batch externo ja processado.
+- [x] Mesmo pipeline para todas as origens via funcao compartilhada de ingestao.
+- [x] Tela de configuracao para Email e Open Finance na aba `Importar`.
+
+Status verificado:
+
+- Feito como base de integracao. O app agora tem `ImportAutomationConfig`, `ImportTransport`, configuracoes persistidas de Email/Open Finance e uma funcao compartilhada para criar batches a partir de texto importado. Ainda nao ha conexao real com Gmail/Outlook/Open Finance, pois isso exige autorizacao, provedor e credenciais externas.
 
 ---
 
@@ -541,7 +546,7 @@ Checklist futuro:
 10. Importar extratos de cartao.
 11. Reconciliar importados com planejamento.
 12. Criar aprendizado por regras.
-13. Futuro: email e Open Finance.
+13. Preparar email e Open Finance.
 
 ---
 
