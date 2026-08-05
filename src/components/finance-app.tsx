@@ -3467,8 +3467,7 @@ export function FinanceApp() {
 
   const buildFixedEntryFromDebt = useCallback((debt: Debt, existingEntry?: FixedFlowEntry): FixedFlowEntry | null => {
     const debtCategory =
-      categories.find((item) => item.id === "cat-debt") ??
-      categories.find((item) => item.name === "Dividas") ??
+      categories.find((item) => item.id === defaultBillCategoryId) ??
       categories.find((item) => item.type === "expense") ??
       categories[0];
 
@@ -3534,7 +3533,7 @@ export function FinanceApp() {
       manualAmountMonths: existingEntry?.manualAmountMonths ?? [],
       notes: debt.description ?? existingEntry?.notes,
     };
-  }, [cards, categories, salaryCalendarMonths, selectedMonth, settings.defaultAccountId]);
+  }, [cards, categories, defaultBillCategoryId, salaryCalendarMonths, selectedMonth, settings.defaultAccountId]);
 
   useEffect(() => {
     if (!hasLoadedPersistedState) {
@@ -3769,7 +3768,10 @@ export function FinanceApp() {
     }
 
     if (operationKind === "debt_payment") {
-      return categories.find((category) => category.id === "cat-debt")?.id ?? "cat-debt";
+      return (
+        categories.find((category) => category.type === "expense" && !isHiddenUiCategoryId(category.id))?.id ??
+        defaultBillCategoryId
+      );
     }
 
     return (
@@ -5382,6 +5384,133 @@ export function FinanceApp() {
       return false;
     }
 
+    const removeEditedSource = () => {
+      if (target.sourceType === "bill") {
+        const sourceBill = bills.find((bill) => bill.id === target.sourceId);
+        const sourceGroupId = sourceBill?.recurringGroupId ?? (sourceBill?.isRecurring ? sourceBill.id : undefined);
+        setBills((current) =>
+          sourceGroupId
+            ? current.filter((bill) => (bill.recurringGroupId ?? bill.id) !== sourceGroupId)
+            : current.filter((bill) => bill.id !== target.sourceId),
+        );
+        setTransactions((current) =>
+          sourceGroupId
+            ? current.filter((transaction) => {
+                const bill = bills.find((currentBill) => currentBill.id === transaction.sourceBillId);
+                return !bill || (bill.recurringGroupId ?? bill.id) !== sourceGroupId;
+              })
+            : current.filter((transaction) => transaction.sourceBillId !== target.sourceId),
+        );
+        return;
+      }
+
+      if (target.sourceType === "fixed") {
+        const sourceEntry = fixedEntries.find((entry) => entry.id === target.sourceId);
+        setFixedEntries((current) => current.filter((entry) => entry.id !== target.sourceId));
+        if (sourceEntry?.linkedBillGroupId) {
+          setBills((current) =>
+            current.filter((bill) => (bill.recurringGroupId ?? bill.id) !== sourceEntry.linkedBillGroupId),
+          );
+          setTransactions((current) =>
+            current.filter((transaction) => {
+              const bill = bills.find((currentBill) => currentBill.id === transaction.sourceBillId);
+              return !bill || (bill.recurringGroupId ?? bill.id) !== sourceEntry.linkedBillGroupId;
+            }),
+          );
+        }
+      }
+    };
+
+    if (
+      (target.sourceType === "bill" || target.sourceType === "fixed") &&
+      draftCommitment.schedule === "installments"
+    ) {
+      const shouldBecomeCardInstallment =
+        draftCommitment.paymentMethod === "card" && draftCommitment.cardMode === "credit";
+      const conversionMonths = activeMonths.length
+        ? activeMonths
+        : Array.from({ length: rawInstallments }, (_, index) => getMonthValueOffset(monthValue, index));
+      const amountByMonth = Object.fromEntries(
+        salaryCalendarMonths.map((monthItem) => {
+          const explicitAmount = monthlyAmounts[monthItem.monthValue] ?? 0;
+          return [
+            monthItem.monthValue,
+            explicitAmount > 0
+              ? explicitAmount
+              : conversionMonths.includes(monthItem.monthValue)
+                ? installmentAmount
+                : 0,
+          ];
+        }),
+      ) as Record<string, number>;
+      const convertedTotalAmount =
+        totalAmount ||
+        conversionMonths.reduce((sum, currentMonth) => sum + (amountByMonth[currentMonth] ?? 0), 0) ||
+        installmentAmount * rawInstallments;
+
+      removeEditedSource();
+
+      if (shouldBecomeCardInstallment) {
+        const nextPurchase: PlannedPurchase = {
+          id: `purchase-${crypto.randomUUID()}`,
+          name: title,
+          description: draftCommitment.notes.trim() || undefined,
+          estimatedValue: convertedTotalAmount,
+          priority: "Alta",
+          desiredDate: draftCommitment.startDate,
+          targetMonth: monthValue,
+          scheduleType: "month",
+          specificMonthTarget: true,
+          boardColumn: monthValue === selectedMonth ? "this_month" : "later",
+          savedAmount: 0,
+          suggestedPeriodAmount: installmentAmount || primaryAmount,
+          plannedAmountByMonth: amountByMonth,
+          status: "planned",
+          planningMode: "card_parcelado",
+          plannedPaymentMethod: "card",
+          plannedCardId: draftCommitment.cardId,
+          plannedCardMode: "credit",
+          plannedInstallments: rawInstallments,
+          notes: draftCommitment.notes.trim() || undefined,
+        };
+
+        setPlannedPurchases((current) => [nextPurchase, ...current]);
+        closeCommitmentModal();
+        return true;
+      }
+
+      const nextDebt: Debt = {
+        id: `debt-${crypto.randomUUID()}`,
+        name: title,
+        description: draftCommitment.notes.trim() || undefined,
+        totalAmount: convertedTotalAmount,
+        paidAmount: 0,
+        remainingAmount: convertedTotalAmount,
+        totalInstallments: Math.max(1, rawInstallments, conversionMonths.length),
+        paidInstallments: 0,
+        installmentAmount: installmentAmount || primaryAmount,
+        nextDueDate: draftCommitment.startDate,
+        priority: "Alta",
+        status: "active",
+        plannedPaymentMethod: draftCommitment.paymentMethod,
+        plannedCardId: draftCommitment.paymentMethod === "card" ? draftCommitment.cardId : undefined,
+      };
+      const linkedEntry = buildFixedEntryFromDebt(nextDebt);
+
+      setDebts((current) => [nextDebt, ...current]);
+      if (linkedEntry) {
+        setFixedEntries((current) => [
+          {
+            ...linkedEntry,
+            amountByMonth,
+          },
+          ...current,
+        ]);
+      }
+      closeCommitmentModal();
+      return true;
+    }
+
     if (target.sourceType === "card_auto_bill") {
       salaryCalendarMonths.forEach((monthItem) => {
         if (Object.prototype.hasOwnProperty.call(draftCommitment.amountByMonth, monthItem.monthValue)) {
@@ -5913,8 +6042,7 @@ export function FinanceApp() {
       Number(draftDebtPlan.installmentAmount.replace(",", ".")) || debt.installmentAmount || 0.01,
     );
     const debtCategory =
-      categories.find((item) => item.id === "cat-debt") ??
-      categories.find((item) => item.name === "Dividas") ??
+      categories.find((item) => item.id === defaultBillCategoryId) ??
       categories.find((item) => item.type === "expense") ??
       categories[0];
     if (!debtCategory) {
@@ -6987,7 +7115,7 @@ export function FinanceApp() {
     const nextAmount = Math.max(0, Number(parsedValue.toFixed(2)));
     const marker = getFixedEntryMarker(entryId, monthValue);
     const nextAmounts =
-      entry.linkedDebtId || entry.categoryId === "cat-debt"
+      entry.linkedDebtId
         ? buildDebtFixedAmounts(entry, monthValue, nextAmount)
         : {
             ...entry.amountByMonth,
@@ -7578,8 +7706,8 @@ export function FinanceApp() {
         type: "expense",
         amount: paymentAmount,
         date: `${selectedMonth}-14`,
-        categoryId: "cat-debt",
-        categoryName: "Dividas",
+        categoryId: defaultBillCategoryId,
+        categoryName: categories.find((category) => category.id === defaultBillCategoryId)?.name ?? "Contas a pagar",
         paymentMethod: paymentDetails.transactionMethod,
         status: "paid",
         expenseKind: "debt_payment",
@@ -14706,7 +14834,7 @@ export function FinanceApp() {
               ? "planned_purchase"
               : draft.operationKind === "investment" || draft.categoryId === "cat-invest"
               ? "investment"
-              : draft.operationKind === "debt_payment" || draft.categoryId === "cat-debt"
+              : draft.operationKind === "debt_payment"
                 ? "debt_payment"
                 : draft.operationKind === "basic_bill" || draft.operationKind === "recurring_bill"
                   ? "basic_bill"
@@ -14741,7 +14869,7 @@ export function FinanceApp() {
               ? "planned_purchase"
               : draft.operationKind === "investment" || draft.categoryId === "cat-invest"
               ? "investment"
-              : draft.operationKind === "debt_payment" || draft.categoryId === "cat-debt"
+              : draft.operationKind === "debt_payment"
                 ? "debt_payment"
                 : draft.operationKind === "basic_bill" || draft.operationKind === "recurring_bill"
                   ? "basic_bill"
