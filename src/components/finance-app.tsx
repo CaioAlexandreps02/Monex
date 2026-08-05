@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import {
@@ -134,7 +135,7 @@ type PlanningScreen = "purchases" | "reserves" | "investments" | "board";
 type PlanningBoardView = "default" | "weeks" | "months";
 type ReportsSection = "cashflow" | "categories" | "payment-methods" | "monthly-trend" | "exports";
 type SettingsSection = "main" | "salary" | "categories" | "banks" | "accounts" | "security";
-type AccountsSection = "overview" | "normal" | "recurring" | "debts";
+type AccountsSection = "overview" | "normal" | "recurring" | "debts" | "archived";
 type HomeTab = "grid" | "planning" | "accounts" | "cards" | "imports";
 type AccountEntryKind = "bill" | "debt";
 type BillDisplayItem =
@@ -275,6 +276,15 @@ type CommitmentEditTarget =
   | { sourceType: "planned_purchase"; sourceId: string; monthValue: string }
   | { sourceType: "debt"; sourceId: string; monthValue: string }
   | { sourceType: "card_auto_bill"; sourceId: string; monthValue: string };
+
+type MonthlyGridDeleteTarget = {
+  rowId: string;
+  sourceId: string;
+  sourceType: MonthlyGridRow["sourceType"];
+  title: string;
+  linkedBillGroupId?: string;
+  linkedDebtId?: string;
+};
 
 type DraftAccount = {
   name: string;
@@ -1259,6 +1269,7 @@ export function FinanceApp() {
     sourceType: MonthlyGridRow["sourceType"];
     monthValue: string;
   } | null>(null);
+  const [pendingMonthlyGridDelete, setPendingMonthlyGridDelete] = useState<MonthlyGridDeleteTarget | null>(null);
   const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false);
   const [transactionScopePrompt, setTransactionScopePrompt] = useState<{
     action: "edit" | "delete";
@@ -1424,14 +1435,14 @@ export function FinanceApp() {
         options.push({ value: `planned_purchase:${purchase.id}`, label: `Compra planejada: ${purchase.name}` });
       });
 
-    bills
+    activeBills
       .filter((bill) => bill.status !== "paid" && bill.dueDate.slice(0, 7) === itemMonth && isAmountClose(item.amount, bill.amount, 0.12))
       .slice(0, 8)
       .forEach((bill) => {
         options.push({ value: `bill:${bill.id}`, label: `Conta: ${bill.title}` });
       });
 
-    fixedEntries
+    activeFixedEntries
       .filter((entry) => (entry.amountByMonth[itemMonth] ?? 0) > 0 && isAmountClose(item.amount, entry.amountByMonth[itemMonth] ?? 0, 0.12))
       .slice(0, 8)
       .forEach((entry) => {
@@ -1480,7 +1491,7 @@ export function FinanceApp() {
         }
       });
 
-      bills.forEach((bill) => {
+      activeBills.forEach((bill) => {
         const similarity = getImportSimilarity(normalizedDescription, normalizeImportedDescription(bill.title));
         if (bill.status !== "paid" && bill.dueDate.slice(0, 7) === monthValue && isAmountClose(amount, bill.amount, 0.12)) {
           candidates.push({
@@ -1493,7 +1504,7 @@ export function FinanceApp() {
         }
       });
 
-      fixedEntries.forEach((entry) => {
+      activeFixedEntries.forEach((entry) => {
         const plannedAmount = entry.amountByMonth[monthValue] ?? 0;
         const similarity = getImportSimilarity(normalizedDescription, normalizeImportedDescription(entry.title));
         if (plannedAmount > 0 && isAmountClose(amount, plannedAmount, 0.12) && similarity >= 0.2) {
@@ -2731,6 +2742,7 @@ export function FinanceApp() {
       return Object.entries(groupedByMonth)
         .filter(([, amount]) => amount > 0)
         .map(([statementMonth, amount]) => {
+          const cardBillEstimate = cardBillEstimates[getCardBillEstimateKey(card.id, statementMonth)];
           const dueDate = monthValueToDate(statementMonth);
           dueDate.setDate(Math.min(card.dueDay, 28));
 
@@ -2738,7 +2750,8 @@ export function FinanceApp() {
             dueDate.getDate(),
           ).padStart(2, "0")}`;
           const today = new Date(`${referenceDate}T12:00:00`);
-          const status: Bill["status"] = dueDate < today ? "overdue" : "pending";
+          const status: Bill["status"] =
+            cardBillEstimate?.status === "paid" ? "paid" : dueDate < today ? "overdue" : "pending";
 
           return {
             source: "card_auto" as const,
@@ -2755,6 +2768,7 @@ export function FinanceApp() {
               isRecurring: true,
               status,
               plannedPaymentMethod: settings.defaultBillPaymentMethod,
+              archivedAt: cardBillEstimate?.archivedAt,
               notes: `Gerada automaticamente a partir dos lancamentos de credito de ${formatMonthLabel(
                 monthValueToDate(statementMonth),
               )}.`,
@@ -2770,7 +2784,7 @@ export function FinanceApp() {
 
   function getCardBillRealAmount(cardId: string, monthValue: string) {
     const bill = autoCardBills.find((item) => item.cardId === cardId && item.statementMonth === monthValue);
-    return bill?.bill.amount ?? 0;
+    return bill?.bill.archivedAt ? 0 : bill?.bill.amount ?? 0;
   }
 
   function getCardBillAutoEstimatedAmount(cardId: string, monthValue: string) {
@@ -2789,6 +2803,10 @@ export function FinanceApp() {
 
   function getCardBillGridAmount(cardId: string, monthValue: string) {
     const estimate = cardBillEstimates[getCardBillEstimateKey(cardId, monthValue)];
+    if (estimate?.archivedAt) {
+      return 0;
+    }
+
     if (estimate && !estimate.isAutoEstimate) {
       return estimate.estimatedAmount;
     }
@@ -2839,12 +2857,34 @@ export function FinanceApp() {
     }));
   }
 
+  const activeBills = bills.filter((bill) => !bill.archivedAt);
+  const archivedBills = bills.filter((bill) => bill.archivedAt);
+  const activeAutoCardBills = autoCardBills.filter((item) => !item.bill.archivedAt);
+  const archivedAutoCardBills = autoCardBills.filter((item) => item.bill.archivedAt);
+  const activeDebts = debts.filter((debt) => !debt.archivedAt);
+  const archivedDebts = debts.filter((debt) => debt.archivedAt);
+  const activeFixedEntries = fixedEntries.filter((entry) => {
+    if (entry.archivedAt) {
+      return false;
+    }
+
+    if (entry.linkedDebtId) {
+      return activeDebts.some((debt) => debt.id === entry.linkedDebtId);
+    }
+
+    if (entry.linkedBillGroupId) {
+      return activeBills.some((bill) => (bill.recurringGroupId ?? bill.id) === entry.linkedBillGroupId);
+    }
+
+    return true;
+  });
+  const archivedFixedEntries = fixedEntries.filter((entry) => entry.archivedAt);
   const allBills = [
-    ...bills.filter((bill) => !isCreditLinkedBill(bill)),
-    ...autoCardBills.map((item) => item.bill),
+    ...activeBills.filter((bill) => !isCreditLinkedBill(bill)),
+    ...activeAutoCardBills.map((item) => item.bill),
   ];
   const manualBillsForDisplay: BillDisplayItem[] = Array.from(
-    bills.reduce((groups, bill) => {
+    activeBills.reduce((groups, bill) => {
       const groupKey = bill.isRecurring ? bill.recurringGroupId ?? bill.id : bill.id;
       const currentGroup = groups.get(groupKey) ?? [];
       currentGroup.push(bill);
@@ -2863,6 +2903,59 @@ export function FinanceApp() {
   const billsForDisplay: BillDisplayItem[] = manualBillsForDisplay.sort((left, right) =>
     left.bill.dueDate.localeCompare(right.bill.dueDate),
   );
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+
+    setBills((current) => {
+      let changed = false;
+      const nextBills = current.map((bill) => {
+        if (bill.status === "paid" && !bill.archivedAt) {
+          changed = true;
+          return { ...bill, archivedAt: now };
+        }
+
+        return bill;
+      });
+
+      return changed ? nextBills : current;
+    });
+
+    setDebts((current) => {
+      let changed = false;
+      const nextDebts = current.map((debt) => {
+        if (debt.status === "settled" && !debt.archivedAt) {
+          changed = true;
+          return { ...debt, archivedAt: now };
+        }
+
+        return debt;
+      });
+
+      return changed ? nextDebts : current;
+    });
+
+    setCardBillEstimates((current) => {
+      let changed = false;
+      const nextEstimates = Object.fromEntries(
+        Object.entries(current).map(([key, estimate]) => {
+          if (estimate.status === "paid" && !estimate.archivedAt) {
+            changed = true;
+            return [key, { ...estimate, archivedAt: now }];
+          }
+
+          return [key, estimate];
+        }),
+      ) as Record<string, CardBillEstimate>;
+
+      return changed ? nextEstimates : current;
+    });
+  }, [hasLoadedPersistedState, bills, debts, cardBillEstimates]);
+
   const selectableBillCategories = getSelectableCategories("expense");
   const defaultBillCategoryId =
     selectableBillCategories[0]?.id ??
@@ -3251,14 +3344,14 @@ export function FinanceApp() {
     ? Math.max(0, selectedCardLimitSnapshot.available)
     : 0;
   const selectedCardStatementAutoBill = selectedCardDetail
-    ? autoCardBills.find(
+    ? activeAutoCardBills.find(
         (item) =>
           item.cardId === selectedCardDetail.id &&
           item.statementMonth === selectedCardStatementMonth,
       )
     : undefined;
   const selectedCardFixedItems = selectedCardDetail
-    ? fixedEntries.filter(
+    ? activeFixedEntries.filter(
         (entry) =>
           entry.paymentMethod === "credit_card" &&
           entry.cardId === selectedCardDetail.id &&
@@ -3335,7 +3428,7 @@ export function FinanceApp() {
   const reconcileFixedEntriesWithBills = useCallback((currentEntries: FixedFlowEntry[]) => {
     const recurringGroups = Array.from(
       bills.reduce((groups, bill) => {
-        if (!bill.isRecurring || !bill.recurringGroupId) {
+        if (bill.archivedAt || !bill.isRecurring || !bill.recurringGroupId) {
           return groups;
         }
 
@@ -3567,7 +3660,7 @@ export function FinanceApp() {
         return syncedEntry ?? entry;
       });
 
-      const debtIds = new Set(debts.map((debt) => debt.id));
+      const debtIds = new Set(debts.filter((debt) => !debt.archivedAt).map((debt) => debt.id));
       const filteredEntries = nextEntries.filter(
         (entry) => !entry.linkedDebtId || debtIds.has(entry.linkedDebtId),
       );
@@ -3577,7 +3670,13 @@ export function FinanceApp() {
           .filter((value): value is string => Boolean(value)),
       );
       const missingDebtEntries = debts
-        .filter((debt) => debt.status !== "settled" && debt.remainingAmount > 0 && !existingDebtEntryIds.has(debt.id))
+        .filter(
+          (debt) =>
+            !debt.archivedAt &&
+            debt.status !== "settled" &&
+            debt.remainingAmount > 0 &&
+            !existingDebtEntryIds.has(debt.id),
+        )
         .map((debt) => buildFixedEntryFromDebt(debt))
         .filter((entry): entry is FixedFlowEntry => Boolean(entry));
       const syncedEntries = [...missingDebtEntries, ...filteredEntries];
@@ -6033,6 +6132,168 @@ export function FinanceApp() {
     }
   }
 
+  function handleRestoreArchivedBill(billId: string) {
+    setBills((current) =>
+      current.map((bill) =>
+        bill.id === billId
+          ? {
+              ...bill,
+              status: bill.status === "paid" ? "pending" : bill.status,
+              archivedAt: undefined,
+            }
+          : bill,
+      ),
+    );
+  }
+
+  function handleRestoreArchivedDebt(debtId: string) {
+    setDebts((current) =>
+      current.map((debt) =>
+        debt.id === debtId
+          ? {
+              ...debt,
+              status: debt.status === "settled" ? "active" : debt.status,
+              archivedAt: undefined,
+            }
+          : debt,
+      ),
+    );
+  }
+
+  function handleRestoreArchivedFixedEntry(entryId: string) {
+    setFixedEntries((current) =>
+      current.map((entry) => (entry.id === entryId ? { ...entry, archivedAt: undefined } : entry)),
+    );
+  }
+
+  function handleRestoreArchivedCardBill(cardId: string, monthValue: string) {
+    const key = getCardBillEstimateKey(cardId, monthValue);
+
+    setCardBillEstimates((current) => ({
+      ...current,
+      [key]: {
+        cardId,
+        monthValue,
+        estimatedAmount: current[key]?.estimatedAmount ?? getCardBillAutoEstimatedAmount(cardId, monthValue),
+        isAutoEstimate: current[key]?.isAutoEstimate ?? true,
+        status: "pending",
+        paidTransactionId: undefined,
+        archivedAt: undefined,
+      },
+    }));
+  }
+
+  function canDeleteMonthlyGridRow(row: MonthlyGridRow) {
+    return row.sourceType !== "card_auto_bill";
+  }
+
+  function getMonthlyGridDeleteDescription(target: MonthlyGridDeleteTarget) {
+    if (target.linkedDebtId) {
+      return "Isso remove a divida e o planejamento dela da planilha.";
+    }
+
+    if (target.linkedBillGroupId) {
+      return "Isso remove a conta sincronizada e os lancamentos vinculados a ela.";
+    }
+
+    if (target.sourceType === "planned_purchase") {
+      return "Isso remove essa compra planejada da planilha e do planejamento.";
+    }
+
+    return "Isso remove essa linha da planilha.";
+  }
+
+  function deleteMonthlyGridTarget(target: MonthlyGridDeleteTarget | CommitmentEditTarget) {
+    if (target.sourceType === "card_auto_bill") {
+      return false;
+    }
+
+    if (target.sourceType === "planned_purchase") {
+      handleDeletePurchase(target.sourceId);
+      closeMonthlyGridCardModal();
+      closeCommitmentModal();
+      setPendingMonthlyGridDelete(null);
+      return true;
+    }
+
+    if (target.sourceType === "debt") {
+      handleDeleteDebt(target.sourceId);
+      closeMonthlyGridCardModal();
+      closeCommitmentModal();
+      setPendingMonthlyGridDelete(null);
+      return true;
+    }
+
+    if (target.sourceType === "fixed") {
+      const sourceEntry = fixedEntries.find((entry) => entry.id === target.sourceId);
+
+      if (sourceEntry?.linkedDebtId) {
+        handleDeleteDebt(sourceEntry.linkedDebtId);
+      } else {
+        const linkedBillGroupId = sourceEntry?.linkedBillGroupId;
+        const linkedBillIds = linkedBillGroupId
+          ? bills
+              .filter((bill) => (bill.recurringGroupId ?? bill.id) === linkedBillGroupId)
+              .map((bill) => bill.id)
+          : [];
+
+        setFixedEntries((current) => current.filter((entry) => entry.id !== target.sourceId));
+
+        if (linkedBillGroupId) {
+          setBills((current) => current.filter((bill) => (bill.recurringGroupId ?? bill.id) !== linkedBillGroupId));
+          setTransactions((current) =>
+            current.filter(
+              (transaction) => !transaction.sourceBillId || !linkedBillIds.includes(transaction.sourceBillId),
+            ),
+          );
+        }
+      }
+
+      closeMonthlyGridCardModal();
+      closeCommitmentModal();
+      setPendingMonthlyGridDelete(null);
+      return true;
+    }
+
+    if (target.sourceType === "bill") {
+      const sourceBill = bills.find((bill) => bill.id === target.sourceId);
+      const sourceGroupId = sourceBill?.recurringGroupId ?? (sourceBill?.isRecurring ? sourceBill.id : undefined);
+      const sourceBillIds = sourceGroupId
+        ? bills.filter((bill) => (bill.recurringGroupId ?? bill.id) === sourceGroupId).map((bill) => bill.id)
+        : [target.sourceId];
+
+      setBills((current) =>
+        sourceGroupId
+          ? current.filter((bill) => (bill.recurringGroupId ?? bill.id) !== sourceGroupId)
+          : current.filter((bill) => bill.id !== target.sourceId),
+      );
+      setTransactions((current) =>
+        current.filter((transaction) => !transaction.sourceBillId || !sourceBillIds.includes(transaction.sourceBillId)),
+      );
+      closeMonthlyGridCardModal();
+      closeCommitmentModal();
+      setPendingMonthlyGridDelete(null);
+      return true;
+    }
+
+    return false;
+  }
+
+  function requestMonthlyGridDelete(row: MonthlyGridRow) {
+    if (!canDeleteMonthlyGridRow(row)) {
+      return;
+    }
+
+    setPendingMonthlyGridDelete({
+      rowId: row.id,
+      sourceId: row.sourceId,
+      sourceType: row.sourceType,
+      title: row.title,
+      linkedBillGroupId: row.linkedBillGroupId,
+      linkedDebtId: row.linkedDebtId,
+    });
+  }
+
   function handleApplyDebtPlan(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -6623,7 +6884,7 @@ export function FinanceApp() {
           !entry.completedMonths.includes(monthItem.monthValue)
         );
       });
-    const fixedRows: MonthlyGridRow[] = fixedEntries
+    const fixedRows: MonthlyGridRow[] = activeFixedEntries
       .filter((entry) => !(entry.linkedBillGroupId && entry.paymentMethod === "credit_card" && entry.cardId))
       .filter((entry) => {
         if (entry.section === "Ganhos") {
@@ -6654,11 +6915,11 @@ export function FinanceApp() {
         completedMonths: entry.completedMonths,
       }));
     const linkedBillEntryIds = new Set(
-      fixedEntries
+      activeFixedEntries
         .map((entry) => entry.linkedBillGroupId)
         .filter((value): value is string => Boolean(value)),
     );
-    const standaloneBillRows: MonthlyGridRow[] = bills
+    const standaloneBillRows: MonthlyGridRow[] = activeBills
       .filter((bill) => !bill.isRecurring && !isCreditLinkedBill(bill))
       .filter((bill) => !linkedBillEntryIds.has(bill.id))
       .map((bill) => {
@@ -7933,6 +8194,14 @@ export function FinanceApp() {
     return [selectedDraftCard.availableMode];
   }
 
+  function renderGlobalModal(content: React.ReactNode) {
+    if (typeof document === "undefined") {
+      return content;
+    }
+
+    return createPortal(content, document.body);
+  }
+
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(103,181,255,0.25),_transparent_32%),linear-gradient(180deg,_#eef6ff_0%,_#f8fbff_35%,_#f4f7fb_100%)] text-slate-900">
       <div className="mx-auto flex min-h-screen max-w-[1600px] gap-4 px-4 py-4 lg:px-6 lg:py-6">
@@ -9049,23 +9318,23 @@ export function FinanceApp() {
 
                       {!isCollapsed ? (
                         <div className="mt-4 overflow-x-auto pb-2">
-                          <table className="w-full min-w-[720px] border-separate border-spacing-0 text-[11px]">
+                          <table className="w-full min-w-[1120px] table-fixed border-separate border-spacing-0 text-[11px]">
                             <thead>
                               <tr className="text-left">
-                                <th className="sticky left-0 z-10 min-w-[132px] rounded-l-2xl border border-slate-200 bg-slate-900 px-2 py-2.5 text-[10px] uppercase tracking-[0.16em] text-white">
+                                <th className="sticky left-0 z-30 w-[180px] rounded-l-2xl border border-slate-200 bg-slate-900 px-2 py-2.5 text-[10px] uppercase tracking-[0.16em] text-white">
                                   Item
                                 </th>
                                 {salaryCalendarMonths.map((monthItem) => (
                                   <th
                                     key={monthItem.monthValue}
-                                    className={`min-w-[64px] border border-slate-200 bg-slate-900 px-1 py-2.5 text-center text-[10px] uppercase tracking-[0.16em] text-white ${
+                                    className={`z-20 w-[78px] border border-slate-200 bg-slate-900 px-1 py-2.5 text-center text-[10px] uppercase tracking-[0.16em] text-white ${
                                       monthItem.monthValue === selectedMonth ? "bg-sky-200 text-sky-950 ring-2 ring-sky-300" : ""
                                     }`}
                                   >
                                     {monthItem.label}
                                   </th>
                                 ))}
-                                <th className="rounded-r-2xl border border-slate-200 bg-slate-900 px-2 py-2.5 text-right text-[10px] uppercase tracking-[0.16em] text-white">
+                                <th className="w-[84px] rounded-r-2xl border border-slate-200 bg-slate-900 px-2 py-2.5 text-right text-[10px] uppercase tracking-[0.16em] text-white">
                                   Total
                                 </th>
                               </tr>
@@ -9094,7 +9363,7 @@ export function FinanceApp() {
                                   {group.rows.map((row) => (
                                 <Fragment key={row.id}>
                                 <tr className="align-top">
-                                  <th className="sticky left-0 z-10 border border-slate-200 bg-white p-1.5 text-left">
+                                  <th className="sticky left-0 z-20 w-[180px] border border-slate-200 bg-white p-1.5 text-left">
                                     <div
                                       role="button"
                                       tabIndex={0}
@@ -9105,7 +9374,7 @@ export function FinanceApp() {
                                           openMonthlyGridRowModal(row);
                                         }
                                       }}
-                                      className="flex min-h-[64px] w-full items-start justify-between gap-2 rounded-[16px] bg-white px-2 py-2 text-left shadow-sm ring-1 ring-transparent transition duration-200 hover:-translate-y-0.5 hover:shadow-md hover:ring-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-200"
+                                      className="grid min-h-[64px] w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-[16px] bg-white px-2 py-2 text-left shadow-sm ring-1 ring-transparent transition duration-200 hover:-translate-y-0.5 hover:shadow-md hover:ring-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-200"
                                       aria-label={`Editar ${row.title}`}
                                     >
                                       <span className="min-w-0">
@@ -9117,6 +9386,22 @@ export function FinanceApp() {
                                         </span>
                                       </span>
                                       <span className="flex flex-col items-end gap-1">
+                                        {canDeleteMonthlyGridRow(row) ? (
+                                          <button
+                                            type="button"
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              requestMonthlyGridDelete(row);
+                                            }}
+                                            onKeyDown={(event) => {
+                                              event.stopPropagation();
+                                            }}
+                                            className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-50 text-rose-600 transition hover:bg-rose-100 focus:outline-none focus:ring-2 focus:ring-rose-200"
+                                            aria-label={`Excluir ${row.title}`}
+                                          >
+                                            <Trash2 className="h-3.5 w-3.5" />
+                                          </button>
+                                        ) : null}
                                         {row.sourceType === "card_auto_bill" ? (
                                           <button
                                             type="button"
@@ -9361,7 +9646,7 @@ export function FinanceApp() {
                                       if (!itemRows.length) {
                                         return (
                                           <tr className="align-top">
-                                            <th className="sticky left-0 z-10 border border-slate-200 bg-white px-2 py-2.5 text-left">
+                                            <th className="sticky left-0 z-20 w-[180px] border border-slate-200 bg-white px-2 py-2.5 text-left">
                                               <p className="text-xs font-semibold text-slate-500">Itens da fatura</p>
                                               <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">
                                                 Nenhum item vinculado
@@ -9388,7 +9673,7 @@ export function FinanceApp() {
 
                                       return itemRows.map((item) => (
                                         <tr key={`${row.id}-${item.id}`} className="align-top">
-                                          <th className="sticky left-0 z-10 border border-slate-200 bg-white px-2 py-2.5 text-left">
+                                          <th className="sticky left-0 z-20 w-[180px] border border-slate-200 bg-white px-2 py-2.5 text-left">
                                             <div className="rounded-xl px-1 py-1">
                                               <p className="text-xs font-semibold text-slate-900">{item.title}</p>
                                               <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">
@@ -9454,7 +9739,7 @@ export function FinanceApp() {
                                 </Fragment>
                               ))}
                               <tr className="align-top">
-                                <th className="sticky left-0 z-10 rounded-bl-2xl border border-slate-200 bg-slate-900 px-2 py-2.5 text-left text-[10px] uppercase tracking-[0.16em] text-white">
+                                <th className="sticky left-0 z-30 w-[180px] rounded-bl-2xl border border-slate-200 bg-slate-900 px-2 py-2.5 text-left text-[10px] uppercase tracking-[0.16em] text-white">
                                   Soma
                                 </th>
                                 {sectionMonthlyTotals.map((amount, index) => (
@@ -9621,6 +9906,7 @@ export function FinanceApp() {
             ) : null}
           </Panel>
 
+          {renderMonthlyGridDeleteConfirmModal()}
           {renderMonthlyGridCardModal()}
           {renderCardBillComparisonModal()}
           {renderCommitmentModal()}
@@ -9712,8 +9998,8 @@ export function FinanceApp() {
           </div>
         )}
 
-        {isTransactionModalOpen ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+        {isTransactionModalOpen ? renderGlobalModal(
+          <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
             <div className="w-full max-w-2xl rounded-[30px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -10030,8 +10316,8 @@ export function FinanceApp() {
             </div>
           </div>
         ) : null}
-        {transactionScopePrompt ? (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+        {transactionScopePrompt ? renderGlobalModal(
+          <div className="fixed inset-0 z-[1010] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
             <div className="w-full max-w-md rounded-[28px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
               <p className="text-xs uppercase tracking-[0.24em] text-sky-600">
                 Parcela detectada
@@ -10079,8 +10365,8 @@ export function FinanceApp() {
     const usesCard =
       draftInvestment.paymentMethod === "credit_card" || draftInvestment.paymentMethod === "debit_card";
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
             <div>
@@ -10273,8 +10559,8 @@ export function FinanceApp() {
       draftInvestmentContribution.paymentMethod === "credit_card" ||
       draftInvestmentContribution.paymentMethod === "debit_card";
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="flex max-h-[86vh] w-full max-w-2xl flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
             <div>
@@ -10467,8 +10753,8 @@ export function FinanceApp() {
     const realItems = getCardStatementGridItems(cardId, monthValue);
     const isPaid = estimate?.status === "paid";
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
             <div>
@@ -10593,6 +10879,58 @@ export function FinanceApp() {
     );
   }
 
+  function renderMonthlyGridDeleteConfirmModal() {
+    if (!pendingMonthlyGridDelete) {
+      return null;
+    }
+
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1010] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/45 px-4 py-8 backdrop-blur-sm">
+        <div className="w-full max-w-md rounded-[28px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.28)]">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-red-600">
+                Confirmar exclusao
+              </p>
+              <h4 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">
+                Excluir {pendingMonthlyGridDelete.title}?
+              </h4>
+              <p className="mt-2 text-sm text-slate-500">
+                {getMonthlyGridDeleteDescription(pendingMonthlyGridDelete)}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPendingMonthlyGridDelete(null)}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-600 transition hover:bg-slate-200"
+              aria-label="Fechar confirmacao"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="mt-6 flex flex-wrap justify-end gap-3">
+            <button
+              type="button"
+              onClick={() => setPendingMonthlyGridDelete(null)}
+              className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={() => deleteMonthlyGridTarget(pendingMonthlyGridDelete)}
+              className="rounded-2xl bg-red-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-red-500"
+            >
+              <Trash2 className="mr-1 inline h-4 w-4" />
+              Excluir
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function renderMonthlyGridCardModal() {
     if (!selectedMonthlyGridCard) {
       return null;
@@ -10639,8 +10977,8 @@ export function FinanceApp() {
           ? "Valor fixo sincronizado com Contas"
           : "Valor fixo recorrente";
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="flex max-h-[86vh] w-full max-w-2xl flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
             <div>
@@ -10791,8 +11129,8 @@ export function FinanceApp() {
       draftFixedEntry.paymentMethod === "credit_card" &&
       selectedFixedCard?.availableMode !== "debit";
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
             <div>
@@ -11053,8 +11391,8 @@ export function FinanceApp() {
                 : "Contas";
     const isEditingCommitment = Boolean(editingCommitmentTarget);
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
             <div>
@@ -11284,24 +11622,38 @@ export function FinanceApp() {
               </div>
             </div>
 
-            <div className="flex shrink-0 justify-end gap-3 border-t border-slate-100 px-6 py-5">
-              <button
-                type="button"
-                onClick={closeCommitmentModal}
-                className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                Cancelar
-              </button>
-              <button
-                type="submit"
-                className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
-              >
-                {isEditingCommitment ? "Salvar alteracoes" : "Salvar"}
-              </button>
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-6 py-5">
+              {editingCommitmentTarget && editingCommitmentTarget.sourceType !== "card_auto_bill" ? (
+                <button
+                  type="button"
+                  onClick={() => deleteMonthlyGridTarget(editingCommitmentTarget)}
+                  className="rounded-2xl border border-red-200 px-4 py-3 text-sm font-semibold text-red-600 transition hover:bg-red-50"
+                >
+                  <Trash2 className="mr-1 inline h-4 w-4" />
+                  Excluir
+                </button>
+              ) : (
+                <span />
+              )}
+              <div className="flex flex-wrap justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={closeCommitmentModal}
+                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
+                >
+                  {isEditingCommitment ? "Salvar alteracoes" : "Salvar"}
+                </button>
+              </div>
             </div>
           </form>
           {pendingCommitmentConversion ? (
-            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 px-4 py-8 backdrop-blur-sm">
+            <div className="fixed inset-0 z-[1010] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/45 px-4 py-8 backdrop-blur-sm">
               <div className="w-full max-w-lg rounded-[28px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.28)]">
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -11370,8 +11722,8 @@ export function FinanceApp() {
       return null;
     }
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="w-full max-w-2xl rounded-[30px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -11629,8 +11981,8 @@ export function FinanceApp() {
         )
       : false;
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="w-full max-w-xl rounded-[30px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -11764,8 +12116,8 @@ export function FinanceApp() {
       return null;
     }
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="w-full max-w-2xl rounded-[30px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -12066,8 +12418,8 @@ export function FinanceApp() {
       return null;
     }
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="w-full max-w-2xl overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex max-h-[88vh] flex-col">
             <div className="flex items-start justify-between gap-4 px-6 pt-6">
@@ -12126,8 +12478,8 @@ export function FinanceApp() {
       return null;
     }
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="w-full max-w-2xl overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex max-h-[88vh] flex-col">
             <div className="flex items-start justify-between gap-4 px-6 pt-6">
@@ -12307,8 +12659,8 @@ export function FinanceApp() {
       return null;
     }
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="w-full max-w-2xl rounded-[30px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -12428,8 +12780,8 @@ export function FinanceApp() {
       ? cards.find((card) => card.id === debt.plannedCardId)?.name
       : undefined;
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
             <div>
@@ -12551,8 +12903,8 @@ export function FinanceApp() {
       return null;
     }
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="w-full max-w-xl rounded-[30px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -12596,8 +12948,8 @@ export function FinanceApp() {
       return null;
     }
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="w-full max-w-xl rounded-[30px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -13638,8 +13990,8 @@ export function FinanceApp() {
     const targetValue = Number(draftCardBalanceUsed.replace(",", ".")) || 0;
     const difference = Number((targetValue - selectedCardStatementTotal).toFixed(2));
 
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+    return renderGlobalModal(
+      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/45 px-4 py-8">
         <div className="w-full max-w-lg rounded-[32px] bg-white p-6 shadow-[0_32px_80px_rgba(15,23,42,0.28)]">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -13718,11 +14070,13 @@ export function FinanceApp() {
     const pendingBillsAmount = allBills
       .filter((bill) => bill.status !== "paid")
       .reduce((sum, bill) => sum + bill.amount, 0);
-    const activeDebtsAmount = debts
+    const activeDebtsAmount = activeDebts
       .filter((debt) => debt.status === "active")
       .reduce((sum, debt) => sum + debt.remainingAmount, 0);
     const normalBillItems = billsForDisplay.filter((item) => item.source === "manual" && !item.bill.isRecurring);
     const recurringBillItems = billsForDisplay.filter((item) => item.source === "manual" && item.bill.isRecurring);
+    const archivedItemsCount =
+      archivedBills.length + archivedAutoCardBills.length + archivedDebts.length + archivedFixedEntries.length;
     const normalBillsAmount = normalBillItems
       .filter((item) => item.bill.status !== "paid")
       .reduce((sum, item) => sum + item.bill.amount, 0);
@@ -13732,6 +14086,7 @@ export function FinanceApp() {
       { id: "normal" as const, label: "Contas" },
       { id: "recurring" as const, label: "Contas recorrentes" },
       { id: "debts" as const, label: "Dividas e acordos" },
+      { id: "archived" as const, label: `Arquivados${archivedItemsCount ? ` (${archivedItemsCount})` : ""}` },
     ];
 
     const accountsToolbar = (
@@ -13858,7 +14213,7 @@ export function FinanceApp() {
 
             <Panel title="Dividas e acordos" description="">
               <div className="space-y-3">
-                {debts.slice(0, 3).map((debt) => (
+                {activeDebts.slice(0, 3).map((debt) => (
                   <div key={debt.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>
@@ -14075,13 +14430,146 @@ export function FinanceApp() {
               })}
             </div>
           </Panel>
+        ) : accountsSection === "archived" ? (
+          <Panel title="Arquivados" description="">
+            <div className="space-y-3">
+              {archivedItemsCount ? (
+                <>
+                  {archivedBills.map((bill) => (
+                    <div
+                      key={`archived-bill-${bill.id}`}
+                      className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-[0_18px_42px_rgba(15,23,42,0.04)]"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{bill.title}</p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            Conta paga em {formatShortDate(bill.dueDate)}
+                          </p>
+                          {bill.archivedAt ? (
+                            <p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">
+                              Arquivada em {formatShortDate(bill.archivedAt.slice(0, 10))}
+                            </p>
+                          ) : null}
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-semibold text-slate-900">{formatCurrency(bill.amount)}</p>
+                          <button
+                            type="button"
+                            onClick={() => handleRestoreArchivedBill(bill.id)}
+                            className="mt-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+                          >
+                            Voltar
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {archivedAutoCardBills.map((item) => (
+                    <div
+                      key={`archived-card-bill-${item.cardId}-${item.statementMonth}`}
+                      className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-[0_18px_42px_rgba(15,23,42,0.04)]"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{item.bill.title}</p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            Fatura de {formatMonthLabel(monthValueToDate(item.statementMonth))}
+                          </p>
+                          {item.bill.archivedAt ? (
+                            <p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">
+                              Arquivada em {formatShortDate(item.bill.archivedAt.slice(0, 10))}
+                            </p>
+                          ) : null}
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-semibold text-slate-900">{formatCurrency(item.bill.amount)}</p>
+                          <button
+                            type="button"
+                            onClick={() => handleRestoreArchivedCardBill(item.cardId, item.statementMonth)}
+                            className="mt-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+                          >
+                            Voltar
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {archivedDebts.map((debt) => (
+                    <div
+                      key={`archived-debt-${debt.id}`}
+                      className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-[0_18px_42px_rgba(15,23,42,0.04)]"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{debt.name}</p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            Divida quitada ou encerrada
+                          </p>
+                          {debt.archivedAt ? (
+                            <p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">
+                              Arquivada em {formatShortDate(debt.archivedAt.slice(0, 10))}
+                            </p>
+                          ) : null}
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-semibold text-slate-900">{formatCurrency(debt.totalAmount)}</p>
+                          <button
+                            type="button"
+                            onClick={() => handleRestoreArchivedDebt(debt.id)}
+                            className="mt-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+                          >
+                            Voltar
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {archivedFixedEntries.map((entry) => (
+                    <div
+                      key={`archived-fixed-${entry.id}`}
+                      className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-[0_18px_42px_rgba(15,23,42,0.04)]"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{entry.title}</p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            Linha arquivada da planilha
+                          </p>
+                          {entry.archivedAt ? (
+                            <p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">
+                              Arquivada em {formatShortDate(entry.archivedAt.slice(0, 10))}
+                            </p>
+                          ) : null}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRestoreArchivedFixedEntry(entry.id)}
+                          className="rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+                        >
+                          Voltar
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                  Nenhuma conta arquivada ainda.
+                </div>
+              )}
+            </div>
+          </Panel>
         ) : (
           <Panel
             title="Dividas e acordos"
             description=""
           >
             <div className="space-y-3">
-              {debts.map((debt) => (
+              {activeDebts.map((debt) => (
                 <div
                   key={debt.id}
                   className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-[0_18px_42px_rgba(15,23,42,0.04)]"

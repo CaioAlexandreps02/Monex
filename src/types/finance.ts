@@ -129,6 +129,7 @@ export interface Bill {
   installments?: number;
   recurringGroupId?: string;
   notes?: string;
+  archivedAt?: string;
 }
 
 export interface Debt {
@@ -147,6 +148,7 @@ export interface Debt {
   plannedPaymentMethod?: PaymentPlanMethod;
   plannedCardId?: string;
   notes?: string;
+  archivedAt?: string;
 }
 
 export interface PlannedPurchase {
@@ -272,6 +274,7 @@ export interface FixedFlowEntry {
   syncCardLimit?: boolean;
   manualAmountMonths?: string[];
   notes?: string;
+  archivedAt?: string;
 }
 
 export interface MonthlyGridRow {
@@ -302,6 +305,7 @@ export interface CardBillEstimate {
   isAutoEstimate: boolean;
   status: "pending" | "paid";
   paidTransactionId?: string;
+  archivedAt?: string;
 }
 
 export interface ImportedStatementMatch {
