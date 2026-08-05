@@ -96,7 +96,6 @@ import {
   CreditCard,
   Plus,
   X,
-  Edit2,
   Trash2,
   AlertCircle,
   TrendingUp,
@@ -104,7 +103,6 @@ import {
   DollarSign,
   Calendar,
   CheckCircle2,
-  Check,
 } from "lucide-react";
 
 type DraftTransaction = {
@@ -169,12 +167,6 @@ type DraftCategory = {
 type DraftSalaryMonth = {
   monthValue: string;
   fixedIncomePlanned: string;
-};
-
-type InlineNewEntry = {
-  section: Extract<FixedFlowSection, "Ganhos" | "Contas">;
-  title: string;
-  amountByMonth: Record<string, string>;
 };
 
 type PurchaseModalOptions = {
@@ -1225,7 +1217,6 @@ export function FinanceApp() {
     rowId: string;
     monthValue: string;
   } | null>(null);
-  const [inlineNewEntry, setInlineNewEntry] = useState<InlineNewEntry | null>(null);
   const [cardBillEstimates, setCardBillEstimates] = useState<Record<string, CardBillEstimate>>({});
   const [importedStatementBatches, setImportedStatementBatches] = useState<ImportedStatementBatch[]>([]);
   const [importedStatementItems, setImportedStatementItems] = useState<ImportedStatementItem[]>([]);
@@ -6636,53 +6627,6 @@ export function FinanceApp() {
     setIsFixedEntryModalOpen(false);
   }
 
-  function handleCancelInlineNewEntry() {
-    setInlineNewEntry(null);
-  }
-
-  function handleCreateFixedEntryFromGrid() {
-    if (!inlineNewEntry?.title.trim()) {
-      return;
-    }
-
-    const amountByMonth = Object.fromEntries(
-      salaryCalendarMonths.map((monthItem) => {
-        const parsedAmount = Number(inlineNewEntry.amountByMonth[monthItem.monthValue]?.replace(",", ".") || 0);
-        return [monthItem.monthValue, Math.max(0, Number((parsedAmount || 0).toFixed(2)))];
-      }),
-    ) as Record<string, number>;
-
-    if (!Object.values(amountByMonth).some((amount) => amount > 0)) {
-      return;
-    }
-
-    const kind = getFixedEntryKind(inlineNewEntry.section);
-    const category =
-      categories.find((item) => item.id === getDefaultCategoryIdForFixedSection(inlineNewEntry.section)) ??
-      categories.find((item) => item.type === kind) ??
-      categories[0];
-
-    if (!category) {
-      return;
-    }
-
-    const nextEntry: FixedFlowEntry = {
-      id: crypto.randomUUID(),
-      section: inlineNewEntry.section,
-      title: inlineNewEntry.title.trim(),
-      kind,
-      categoryId: category.id,
-      categoryName: category.name,
-      amountByMonth,
-      completedMonths: [],
-      paymentMethod: "pix",
-      accountId: settings.defaultAccountId,
-    };
-
-    setFixedEntries((current) => [...current, nextEntry]);
-    setInlineNewEntry(null);
-  }
-
   function openInvestmentModal(investment?: Investment) {
     setEditingInvestmentId(investment?.id ?? null);
     setDraftInvestment(buildInvestmentDraft(investment));
@@ -8985,149 +8929,33 @@ export function FinanceApp() {
                                   {section === "Contas" ? (
                                     <tr>
                                       <td colSpan={salaryCalendarMonths.length + 2} className="border-0 bg-transparent px-0 py-1.5">
-                                        <div className="flex items-center justify-between gap-3 rounded-2xl bg-white/70 px-3 py-2">
+                                        <div className="flex items-center rounded-2xl bg-white/70 px-3 py-2">
                                           <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                                             {group.key}
                                           </span>
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              if (group.key === "Contas fixas") {
-                                                openCommitmentModal({ kind: "expense", schedule: "recurring", paymentMethod: "pix" });
-                                                return;
-                                              }
-
-                                              if (group.key === "Compras planejadas") {
-                                                openCommitmentModal({ kind: "expense", schedule: "saving_goal", paymentMethod: "pix" });
-                                                return;
-                                              }
-
-                                              if (group.key === "Faturas") {
-                                                openCommitmentModal({
-                                                  kind: "expense",
-                                                  schedule: "installments",
-                                                  paymentMethod: "card",
-                                                  cardMode: "credit",
-                                                  installments: "2",
-                                                });
-                                                return;
-                                              }
-
-                                              openCommitmentModal({ kind: "expense", schedule: "installments", paymentMethod: "pix", installments: "2" });
-                                            }}
-                                            aria-label={`Adicionar em ${group.key}`}
-                                            className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-900 text-white transition hover:bg-slate-700"
-                                          >
-                                            <Plus className="h-3 w-3" />
-                                          </button>
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  ) : null}
-                                  {inlineNewEntry?.section === section &&
-                                  (section === "Ganhos" || group.key === "Contas fixas") ? (
-                                    <tr className="align-top">
-                                      <th className="sticky left-0 z-10 border border-dashed border-sky-300 bg-sky-50 px-2 py-2.5 text-left">
-                                        <input
-                                          autoFocus
-                                          value={inlineNewEntry.title}
-                                          onChange={(event) =>
-                                            setInlineNewEntry((current) =>
-                                              current ? { ...current, title: event.target.value } : current,
-                                            )
-                                          }
-                                          onKeyDown={(event) => {
-                                            if (event.key === "Enter") {
-                                              event.preventDefault();
-                                              handleCreateFixedEntryFromGrid();
-                                            }
-
-                                            if (event.key === "Escape") {
-                                              handleCancelInlineNewEntry();
-                                            }
-                                          }}
-                                          placeholder="Novo item..."
-                                          className="w-full bg-transparent text-xs font-semibold text-slate-900 outline-none placeholder:text-slate-400"
-                                        />
-                                      </th>
-                                      {salaryCalendarMonths.map((monthItem) => (
-                                        <td key={`inline-${monthItem.monthValue}`} className="border border-dashed border-sky-300 bg-sky-50 p-1">
-                                          <input
-                                            value={inlineNewEntry.amountByMonth[monthItem.monthValue] ?? ""}
-                                            onChange={(event) =>
-                                              setInlineNewEntry((current) =>
-                                                current
-                                                  ? {
-                                                      ...current,
-                                                      amountByMonth: {
-                                                        ...current.amountByMonth,
-                                                        [monthItem.monthValue]: event.target.value,
-                                                      },
-                                                    }
-                                                  : current,
-                                              )
-                                            }
-                                            onKeyDown={(event) => {
-                                              if (event.key === "Enter") {
-                                                event.preventDefault();
-                                                handleCreateFixedEntryFromGrid();
-                                              }
-
-                                              if (event.key === "Escape") {
-                                                handleCancelInlineNewEntry();
-                                              }
-                                            }}
-                                            inputMode="decimal"
-                                            placeholder="0"
-                                            className="min-h-[54px] w-full rounded-[16px] bg-white/80 px-2 text-[11px] font-semibold text-sky-900 outline-none placeholder:text-sky-300"
-                                          />
-                                        </td>
-                                      ))}
-                                      <td className="border border-dashed border-sky-300 bg-sky-50 px-2 py-2.5">
-                                        <div className="flex justify-end gap-1">
-                                          <button
-                                            type="button"
-                                            onClick={handleCreateFixedEntryFromGrid}
-                                            className="rounded-full bg-emerald-100 p-2 text-emerald-700 transition hover:bg-emerald-200"
-                                          >
-                                            <Check className="h-3.5 w-3.5" />
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={handleCancelInlineNewEntry}
-                                            className="rounded-full bg-white p-2 text-slate-500 transition hover:bg-slate-100"
-                                          >
-                                            <X className="h-3.5 w-3.5" />
-                                          </button>
                                         </div>
                                       </td>
                                     </tr>
                                   ) : null}
                                   {group.rows.map((row) => (
-                                <tr key={row.id} className="align-top">
+                                <Fragment key={row.id}>
+                                <tr className="align-top">
                                   <th className="sticky left-0 z-10 border border-slate-200 bg-white px-2 py-2.5 text-left">
                                     <div className="flex items-start justify-between gap-2">
-                                      <div>
-                                        <button
-                                          type="button"
-                                          onClick={() => openMonthlyGridRowModal(row)}
-                                          className="text-left text-xs font-semibold text-slate-900 transition hover:text-sky-700"
-                                        >
+                                      <button
+                                        type="button"
+                                        onClick={() => openMonthlyGridRowModal(row)}
+                                        className="min-w-0 flex-1 rounded-xl px-1 py-1 text-left transition hover:bg-sky-50 focus:outline-none focus:ring-2 focus:ring-sky-200"
+                                        aria-label={`Editar ${row.title}`}
+                                      >
+                                        <span className="block text-xs font-semibold text-slate-900 transition hover:text-sky-700">
                                           {row.title}
-                                        </button>
-                                        <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">
+                                        </span>
+                                        <span className="mt-1 block text-[10px] uppercase tracking-[0.14em] text-slate-400">
                                           {getDisplayCategoryName(row.categoryId, row.categoryName)}
-                                        </p>
-                                      </div>
+                                        </span>
+                                      </button>
                                       <div className="flex flex-col items-end gap-1">
-                                        <button
-                                          type="button"
-                                          onClick={() => openMonthlyGridRowModal(row)}
-                                          className="flex items-center gap-1 rounded-full border border-slate-200 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 transition hover:bg-slate-50"
-                                        >
-                                          <Edit2 className="h-3 w-3" />
-                                          Editar
-                                        </button>
                                         {row.sourceType === "card_auto_bill" ? (
                                           <button
                                             type="button"
@@ -9139,7 +8967,7 @@ export function FinanceApp() {
                                             }
                                             className="rounded-full bg-sky-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-sky-700 transition hover:bg-sky-100"
                                           >
-                                            {expandedCardBillRows[row.sourceId] ? "Ocultar itens" : "Visualizar itens"}
+                                            {expandedCardBillRows[row.sourceId] ? "Recolher" : "Expandir"}
                                           </button>
                                         ) : null}
                                       </div>
@@ -9150,14 +8978,6 @@ export function FinanceApp() {
                                     const isCompleted = row.completedMonths.includes(monthItem.monthValue);
                                     const isPurchaseRow = row.sourceType === "planned_purchase";
                                     const isCardAutoBillRow = row.sourceType === "card_auto_bill";
-                                    const cardStatementItems = isCardAutoBillRow
-                                      ? getCardStatementGridItems(row.sourceId, monthItem.monthValue)
-                                      : [];
-                                    const visibleCardStatementItems = cardStatementItems.slice(-5);
-                                    const hiddenCardStatementItemCount = Math.max(
-                                      0,
-                                      cardStatementItems.length - visibleCardStatementItems.length,
-                                    );
                                     const selectedMonthCellClass =
                                       monthItem.monthValue === selectedMonth ? "ring-2 ring-inset ring-sky-400" : "";
                                     const cardBillEstimate = isCardAutoBillRow
@@ -9274,44 +9094,6 @@ export function FinanceApp() {
                                                 ) : null}
                                               </div>
                                             ) : null}
-                                            {expandedCardBillRows[row.sourceId] ? (
-                                              <div className="mt-2 space-y-1 border-t border-sky-200/70 pt-2">
-                                                {visibleCardStatementItems.length ? (
-                                                  visibleCardStatementItems.map((item) => (
-                                                    <div key={item.id} className="flex justify-between gap-2 text-[10px]">
-                                                      <span className="min-w-0">
-                                                        <span className="block truncate">{item.title}</span>
-                                                        <span className="block truncate text-[9px] text-slate-400">
-                                                          {item.support}
-                                                        </span>
-                                                      </span>
-                                                      <span className="font-semibold">
-                                                        {formatCurrency(item.amount)}
-                                                      </span>
-                                                    </div>
-                                                  ))
-                                                ) : (
-                                                  <p className="text-[10px] font-semibold text-slate-400">
-                                                    Nenhum item recorrente vinculado a esta fatura.
-                                                  </p>
-                                                )}
-                                                {hiddenCardStatementItemCount > 0 ? (
-                                                  <button
-                                                    type="button"
-                                                    onClick={(event) => {
-                                                      event.stopPropagation();
-                                                      openCardDetails(
-                                                        row.sourceId,
-                                                        monthItem.monthValue,
-                                                      );
-                                                    }}
-                                                    className="mt-1 w-full rounded-full bg-white/80 px-2 py-1 text-left text-[10px] font-semibold text-sky-700 transition hover:bg-white"
-                                                  >
-                                                    Ver mais {hiddenCardStatementItemCount}
-                                                  </button>
-                                                ) : null}
-                                              </div>
-                                            ) : null}
                                           </div>
                                         ) : (
                                           <div
@@ -9362,6 +9144,122 @@ export function FinanceApp() {
                                     </p>
                                   </td>
                                 </tr>
+                                {row.sourceType === "card_auto_bill" && expandedCardBillRows[row.sourceId]
+                                  ? (() => {
+                                      const allItemsByMonth = salaryCalendarMonths.map((monthItem) => ({
+                                        monthValue: monthItem.monthValue,
+                                        items: getCardStatementGridItems(row.sourceId, monthItem.monthValue),
+                                      }));
+                                      const itemIds = Array.from(
+                                        new Set(
+                                          allItemsByMonth.flatMap(({ items }) => items.map((item) => item.id)),
+                                        ),
+                                      );
+                                      const itemRows = itemIds
+                                        .map((itemId) => {
+                                          const amountsByMonth = Object.fromEntries(
+                                            allItemsByMonth.map(({ monthValue, items }) => [
+                                              monthValue,
+                                              items
+                                                .filter((item) => item.id === itemId)
+                                                .reduce((sum, item) => sum + item.amount, 0),
+                                            ]),
+                                          ) as Record<string, number>;
+                                          const firstItem = allItemsByMonth
+                                            .flatMap(({ items }) => items)
+                                            .find((item) => item.id === itemId);
+                                          const total = Object.values(amountsByMonth).reduce((sum, amountValue) => sum + amountValue, 0);
+
+                                          return firstItem && total !== 0
+                                            ? {
+                                                ...firstItem,
+                                                amountsByMonth,
+                                                total,
+                                              }
+                                            : null;
+                                        })
+                                        .filter((item): item is CardStatementGridItem & { amountsByMonth: Record<string, number>; total: number } => Boolean(item))
+                                        .sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+
+                                      if (!itemRows.length) {
+                                        return (
+                                          <tr className="align-top">
+                                            <th className="sticky left-0 z-10 border border-slate-200 bg-sky-50 px-2 py-2.5 text-left">
+                                              <p className="text-xs font-semibold text-slate-500">Itens da fatura</p>
+                                              <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">
+                                                Nenhum item vinculado
+                                              </p>
+                                            </th>
+                                            {salaryCalendarMonths.map((monthItem) => (
+                                              <td
+                                                key={`${row.id}-empty-${monthItem.monthValue}`}
+                                                className={`border border-slate-200 bg-sky-50/60 p-1 ${
+                                                  monthItem.monthValue === selectedMonth ? "bg-sky-100/80 ring-1 ring-sky-200" : ""
+                                                }`}
+                                              >
+                                                <div className="flex min-h-[54px] items-center rounded-[16px] bg-white/70 px-2 text-[10px] font-semibold text-slate-300">
+                                                  -
+                                                </div>
+                                              </td>
+                                            ))}
+                                            <td className="border border-slate-200 bg-sky-50/60 px-2 py-2.5 text-right">
+                                              <p className="text-[11px] font-semibold text-slate-400">-</p>
+                                            </td>
+                                          </tr>
+                                        );
+                                      }
+
+                                      return itemRows.map((item) => (
+                                        <tr key={`${row.id}-${item.id}`} className="align-top">
+                                          <th className="sticky left-0 z-10 border border-slate-200 bg-sky-50 px-2 py-2.5 text-left">
+                                            <div className="rounded-xl px-1 py-1">
+                                              <p className="text-xs font-semibold text-slate-900">{item.title}</p>
+                                              <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">
+                                                {item.support}
+                                              </p>
+                                            </div>
+                                          </th>
+                                          {salaryCalendarMonths.map((monthItem) => {
+                                            const itemAmount = item.amountsByMonth[monthItem.monthValue] ?? 0;
+                                            return (
+                                              <td
+                                                key={`${row.id}-${item.id}-${monthItem.monthValue}`}
+                                                className={`border border-slate-200 bg-sky-50/60 p-1 ${
+                                                  monthItem.monthValue === selectedMonth ? "bg-sky-100/80 ring-1 ring-sky-200" : ""
+                                                }`}
+                                              >
+                                                <button
+                                                  type="button"
+                                                  onClick={() => openCardDetails(row.sourceId, monthItem.monthValue)}
+                                                  disabled={itemAmount === 0}
+                                                  className={`flex min-h-[54px] w-full flex-col justify-between rounded-[16px] px-2 py-2 text-left transition ${
+                                                    itemAmount === 0
+                                                      ? "cursor-default bg-white/60 text-slate-300"
+                                                      : itemAmount < 0
+                                                        ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                                                        : "bg-white text-sky-800 hover:bg-sky-100"
+                                                  }`}
+                                                >
+                                                  <span className="text-[11px] font-semibold leading-tight">
+                                                    {itemAmount !== 0 ? formatCurrency(itemAmount) : "-"}
+                                                  </span>
+                                                  <span className="text-[9px] font-semibold uppercase tracking-[0.12em]">
+                                                    {itemAmount !== 0 ? "Abrir" : "Sem valor"}
+                                                  </span>
+                                                </button>
+                                              </td>
+                                            );
+                                          })}
+                                          <td className="border border-slate-200 bg-sky-50/60 px-2 py-2.5 text-right">
+                                            <p className="text-[11px] font-semibold text-slate-900">
+                                              {formatCurrency(item.total)}
+                                            </p>
+                                          </td>
+                                        </tr>
+                                      ));
+                                    })()
+                                  : null}
+                                </Fragment>
                                   ))}
                                 </Fragment>
                               ))}
