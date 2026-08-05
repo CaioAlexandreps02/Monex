@@ -95,6 +95,8 @@ import {
   Wallet,
   CreditCard,
   Plus,
+  ChevronDown,
+  ChevronUp,
   X,
   Trash2,
   AlertCircle,
@@ -8940,37 +8942,60 @@ export function FinanceApp() {
                                   {group.rows.map((row) => (
                                 <Fragment key={row.id}>
                                 <tr className="align-top">
-                                  <th className="sticky left-0 z-10 border border-slate-200 bg-white px-2 py-2.5 text-left">
-                                    <div className="flex items-start justify-between gap-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => openMonthlyGridRowModal(row)}
-                                        className="min-w-0 flex-1 rounded-xl px-1 py-1 text-left transition hover:bg-sky-50 focus:outline-none focus:ring-2 focus:ring-sky-200"
-                                        aria-label={`Editar ${row.title}`}
-                                      >
-                                        <span className="block text-xs font-semibold text-slate-900 transition hover:text-sky-700">
+                                  <th className="sticky left-0 z-10 border border-slate-200 bg-white p-1.5 text-left">
+                                    <div
+                                      role="button"
+                                      tabIndex={0}
+                                      onClick={() => openMonthlyGridRowModal(row)}
+                                      onKeyDown={(event) => {
+                                        if (event.key === "Enter" || event.key === " ") {
+                                          event.preventDefault();
+                                          openMonthlyGridRowModal(row);
+                                        }
+                                      }}
+                                      className="flex min-h-[64px] w-full items-start justify-between gap-2 rounded-[16px] bg-white px-2 py-2 text-left shadow-sm ring-1 ring-transparent transition duration-200 hover:-translate-y-0.5 hover:shadow-md hover:ring-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-200"
+                                      aria-label={`Editar ${row.title}`}
+                                    >
+                                      <span className="min-w-0">
+                                        <span className="block text-xs font-semibold text-slate-900">
                                           {row.title}
                                         </span>
                                         <span className="mt-1 block text-[10px] uppercase tracking-[0.14em] text-slate-400">
                                           {getDisplayCategoryName(row.categoryId, row.categoryName)}
                                         </span>
-                                      </button>
-                                      <div className="flex flex-col items-end gap-1">
+                                      </span>
+                                      <span className="flex flex-col items-end gap-1">
                                         {row.sourceType === "card_auto_bill" ? (
                                           <button
                                             type="button"
-                                            onClick={() =>
+                                            onClick={(event) => {
+                                              event.stopPropagation();
                                               setExpandedCardBillRows((current) => ({
                                                 ...current,
                                                 [row.sourceId]: !current[row.sourceId],
-                                              }))
-                                            }
-                                            className="rounded-full bg-sky-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-sky-700 transition hover:bg-sky-100"
+                                              }));
+                                            }}
+                                            onKeyDown={(event) => {
+                                              if (event.key === "Enter" || event.key === " ") {
+                                                event.preventDefault();
+                                                event.stopPropagation();
+                                                setExpandedCardBillRows((current) => ({
+                                                  ...current,
+                                                  [row.sourceId]: !current[row.sourceId],
+                                                }));
+                                              }
+                                            }}
+                                            className="flex h-7 w-7 items-center justify-center rounded-full bg-sky-50 text-sky-700 transition hover:bg-sky-100"
+                                            aria-label={expandedCardBillRows[row.sourceId] ? "Recolher fatura" : "Expandir fatura"}
                                           >
-                                            {expandedCardBillRows[row.sourceId] ? "Recolher" : "Expandir"}
+                                            {expandedCardBillRows[row.sourceId] ? (
+                                              <ChevronUp className="h-4 w-4" />
+                                            ) : (
+                                              <ChevronDown className="h-4 w-4" />
+                                            )}
                                           </button>
                                         ) : null}
-                                      </div>
+                                      </span>
                                     </div>
                                   </th>
                                   {salaryCalendarMonths.map((monthItem) => {
@@ -9184,7 +9209,7 @@ export function FinanceApp() {
                                       if (!itemRows.length) {
                                         return (
                                           <tr className="align-top">
-                                            <th className="sticky left-0 z-10 border border-slate-200 bg-sky-50 px-2 py-2.5 text-left">
+                                            <th className="sticky left-0 z-10 border border-slate-200 bg-white px-2 py-2.5 text-left">
                                               <p className="text-xs font-semibold text-slate-500">Itens da fatura</p>
                                               <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">
                                                 Nenhum item vinculado
@@ -9193,8 +9218,8 @@ export function FinanceApp() {
                                             {salaryCalendarMonths.map((monthItem) => (
                                               <td
                                                 key={`${row.id}-empty-${monthItem.monthValue}`}
-                                                className={`border border-slate-200 bg-sky-50/60 p-1 ${
-                                                  monthItem.monthValue === selectedMonth ? "bg-sky-100/80 ring-1 ring-sky-200" : ""
+                                                className={`border border-slate-200 bg-white p-1 ${
+                                                  monthItem.monthValue === selectedMonth ? "ring-1 ring-sky-200" : ""
                                                 }`}
                                               >
                                                 <div className="flex min-h-[54px] items-center rounded-[16px] bg-white/70 px-2 text-[10px] font-semibold text-slate-300">
@@ -9202,7 +9227,7 @@ export function FinanceApp() {
                                                 </div>
                                               </td>
                                             ))}
-                                            <td className="border border-slate-200 bg-sky-50/60 px-2 py-2.5 text-right">
+                                            <td className="border border-slate-200 bg-white px-2 py-2.5 text-right">
                                               <p className="text-[11px] font-semibold text-slate-400">-</p>
                                             </td>
                                           </tr>
@@ -9211,7 +9236,7 @@ export function FinanceApp() {
 
                                       return itemRows.map((item) => (
                                         <tr key={`${row.id}-${item.id}`} className="align-top">
-                                          <th className="sticky left-0 z-10 border border-slate-200 bg-sky-50 px-2 py-2.5 text-left">
+                                          <th className="sticky left-0 z-10 border border-slate-200 bg-white px-2 py-2.5 text-left">
                                             <div className="rounded-xl px-1 py-1">
                                               <p className="text-xs font-semibold text-slate-900">{item.title}</p>
                                               <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">
@@ -9224,8 +9249,8 @@ export function FinanceApp() {
                                             return (
                                               <td
                                                 key={`${row.id}-${item.id}-${monthItem.monthValue}`}
-                                                className={`border border-slate-200 bg-sky-50/60 p-1 ${
-                                                  monthItem.monthValue === selectedMonth ? "bg-sky-100/80 ring-1 ring-sky-200" : ""
+                                                className={`border border-slate-200 bg-white p-1 ${
+                                                  monthItem.monthValue === selectedMonth ? "ring-1 ring-sky-200" : ""
                                                 }`}
                                               >
                                                 <button
@@ -9237,7 +9262,7 @@ export function FinanceApp() {
                                                       ? "cursor-default bg-white/60 text-slate-300"
                                                       : itemAmount < 0
                                                         ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                                                        : "bg-white text-sky-800 hover:bg-sky-100"
+                                                        : "bg-rose-50 text-rose-700 hover:bg-rose-100"
                                                   }`}
                                                 >
                                                   <span className="text-[11px] font-semibold leading-tight">
@@ -9250,7 +9275,7 @@ export function FinanceApp() {
                                               </td>
                                             );
                                           })}
-                                          <td className="border border-slate-200 bg-sky-50/60 px-2 py-2.5 text-right">
+                                          <td className="border border-slate-200 bg-white px-2 py-2.5 text-right">
                                             <p className="text-[11px] font-semibold text-slate-900">
                                               {formatCurrency(item.total)}
                                             </p>
