@@ -333,6 +333,23 @@ export interface ImportLearningRule {
   lastAppliedAt?: string;
 }
 
+export interface ImportMerchant {
+  id: string;
+  name: string;
+  aliases: string[];
+  sourceKind: "bank_account" | "credit_card" | "unknown";
+  suggestedCategoryId?: string;
+  suggestedTransactionType?: TransactionType;
+  paymentMethod?: PaymentMethod;
+  suggestedMatch?: ImportedStatementMatch;
+  supportCount: number;
+  mistakeCount: number;
+  status: "suggested" | "approved" | "disabled";
+  createdAt: string;
+  updatedAt: string;
+  lastAppliedAt?: string;
+}
+
 export interface ImportAutomationConfig {
   id: string;
   transport: Exclude<ImportTransport, "manual_upload">;
@@ -376,6 +393,7 @@ export interface ImportedStatementItem {
   id: string;
   batchId: string;
   rawDescription: string;
+  reviewTitle?: string;
   normalizedDescription: string;
   date: string;
   amount: number;
@@ -391,6 +409,7 @@ export interface ImportedStatementItem {
   suggestedTransactionType?: TransactionType;
   suggestedMatch?: ImportedStatementMatch;
   appliedLearningRuleId?: string;
+  detectedMerchantId?: string;
   statementMonth?: string;
   confidence: number;
   status: "pending" | "confirmed" | "ignored" | "duplicate";

@@ -54,6 +54,7 @@ import type {
   ImportAutomationConfig,
   ImportTransport,
   ImportLearningRule,
+  ImportMerchant,
   ImportedStatementBatch,
   ImportedStatementItem,
   Investment,
@@ -269,7 +270,17 @@ type DraftCommitment = {
   cardId: string;
   cardMode: CardMode;
   notes: string;
+  amountByMonth: Record<string, string>;
 };
+
+type CommitmentConversionKind = "agreement" | "recurring" | "installment";
+
+type CommitmentEditTarget =
+  | { sourceType: "bill"; sourceId: string; monthValue: string }
+  | { sourceType: "fixed"; sourceId: string; monthValue: string }
+  | { sourceType: "planned_purchase"; sourceId: string; monthValue: string }
+  | { sourceType: "debt"; sourceId: string; monthValue: string }
+  | { sourceType: "card_auto_bill"; sourceId: string; monthValue: string };
 
 type DraftAccount = {
   name: string;
@@ -457,6 +468,7 @@ type FinancePersistedState = {
   importedStatementBatches: ImportedStatementBatch[];
   importedStatementItems: ImportedStatementItem[];
   importLearningRules: ImportLearningRule[];
+  importMerchants: ImportMerchant[];
   importAutomationConfigs: ImportAutomationConfig[];
   settings: Settings;
   monthlyPlansByMonth: Record<string, MonthlyPlan>;
@@ -576,6 +588,7 @@ const initialDraftCommitment: DraftCommitment = {
   cardId: "card-nubank",
   cardMode: "credit",
   notes: "",
+  amountByMonth: {},
 };
 
 const initialDraftAccount: DraftAccount = {
@@ -761,9 +774,21 @@ function normalizeImportedDescription(value: string) {
   return value
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
+    .replace(/Ã‡ÃƒO/g, "CAO")
+    .replace(/Ã‰/g, "E")
     .replace(/\s+/g, " ")
     .trim()
     .toUpperCase();
+}
+
+function decodeImportedText(value: string) {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)));
 }
 
 function splitCsvLine(line: string) {
@@ -771,8 +796,15 @@ function splitCsvLine(line: string) {
   let current = "";
   let inQuotes = false;
 
-  for (const char of line) {
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
     if (char === "\"") {
+      if (inQuotes && line[index + 1] === "\"") {
+        current += "\"";
+        index += 1;
+        continue;
+      }
+
       inQuotes = !inQuotes;
       continue;
     }
@@ -827,11 +859,11 @@ function detectImportPaymentMethod(description: string, sourceKind: ImportedStat
     return "pix";
   }
 
-  if (description.includes("DEBIT") || description.includes("DEBITO")) {
+  if (description.includes("DEBIT") || description.includes("DEBITO") || description.includes("COMPRA")) {
     return "debit_card";
   }
 
-  if (description.includes("BOLETO")) {
+  if (description.includes("BOLETO") || description.includes("TRANSFERENCIA") || description.includes("PAGAMENTO")) {
     return "bank_transfer";
   }
 
@@ -857,7 +889,17 @@ function getCreditCardTransactionSignedAmount(transaction: Transaction) {
   return transaction.amount;
 }
 
-function buildImportFingerprint(date: string, amount: number, normalizedDescription: string, sourceId: string) {
+function buildImportFingerprint(
+  date: string,
+  amount: number,
+  normalizedDescription: string,
+  sourceId: string,
+  externalItemId?: string,
+) {
+  if (externalItemId) {
+    return [sourceId, "external", externalItemId].join(":");
+  }
+
   return [date, amount.toFixed(2), normalizedDescription, sourceId].join(":");
 }
 
@@ -868,6 +910,18 @@ function getImportPattern(normalizedDescription: string) {
     .filter((token) => token.length >= 3 && !/^\d+$/.test(token));
 
   return tokens.slice(0, 3).join(" ") || normalizedDescription.slice(0, 28);
+}
+
+function getImportMerchantAlias(normalizedDescription: string) {
+  const cleaned = normalizedDescription
+    .replace(/\b(COMPRA|PIX|TRANSFERENCIA|PAGAMENTO|ENVIADA|RECEBIDA|EFETUADO|DEBITO|CREDITO)\b/g, " ")
+    .replace(/\b(CNPJ|CPF|LTDA|SA|S A|ME|EPP)\b/g, " ")
+    .replace(/\b\d{2,}\b/g, " ")
+    .replace(/[^A-Z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return getImportPattern(cleaned || normalizedDescription);
 }
 
 function getImportSimilarity(left: string, right: string) {
@@ -1121,6 +1175,11 @@ export function FinanceApp() {
   const [draftDebt, setDraftDebt] = useState(initialDraftDebt);
   const [draftDebtPlan, setDraftDebtPlan] = useState(initialDraftDebtPlan);
   const [draftCommitment, setDraftCommitment] = useState(initialDraftCommitment);
+  const [editingCommitmentTarget, setEditingCommitmentTarget] = useState<CommitmentEditTarget | null>(null);
+  const [pendingCommitmentConversion, setPendingCommitmentConversion] = useState<{
+    target: CommitmentEditTarget;
+    activeMonths: string[];
+  } | null>(null);
   const [draftAccount, setDraftAccount] = useState(initialDraftAccount);
   const [draftFixedEntry, setDraftFixedEntry] = useState<DraftFixedEntry>(() => ({
     ...initialDraftFixedEntry,
@@ -1171,6 +1230,7 @@ export function FinanceApp() {
   const [importedStatementBatches, setImportedStatementBatches] = useState<ImportedStatementBatch[]>([]);
   const [importedStatementItems, setImportedStatementItems] = useState<ImportedStatementItem[]>([]);
   const [importLearningRules, setImportLearningRules] = useState<ImportLearningRule[]>([]);
+  const [importMerchants, setImportMerchants] = useState<ImportMerchant[]>([]);
   const [importAutomationConfigs, setImportAutomationConfigs] = useState<ImportAutomationConfig[]>(
     initialImportAutomationConfigs,
   );
@@ -1276,6 +1336,20 @@ export function FinanceApp() {
       return categories.find((category) => category.name.toLowerCase().includes("assin"))?.id;
     }
 
+    if (type === "expense" && lowerDescription.includes("aplicacao")) {
+      return categories.find((category) => category.id === "cat-invest")?.id;
+    }
+
+    if (
+      type === "income" &&
+      (lowerDescription.includes("reembolso") ||
+        lowerDescription.includes("estorno") ||
+        lowerDescription.includes("resgate") ||
+        lowerDescription.includes("rendimento"))
+    ) {
+      return categories.find((category) => category.id === "cat-extra")?.id;
+    }
+
     return categories.find((category) => category.type === type && !isHiddenUiCategoryId(category.id))?.id ?? categories[0]?.id;
   }
 
@@ -1327,7 +1401,7 @@ export function FinanceApp() {
 
   function getImportMatchOptions(item: ImportedStatementItem) {
     const itemMonth = item.date.slice(0, 7);
-    const options = [{ value: "none", label: "Sem vinculo" }];
+    const options = [{ value: "none", label: "Sem vinculo (so historico)" }];
 
     activePlannedPurchases
       .filter((purchase) => {
@@ -1459,6 +1533,77 @@ export function FinanceApp() {
       .sort((left, right) => right.supportCount - left.supportCount)[0];
   }
 
+  function getDetectedImportMerchant(
+    normalizedDescription: string,
+    sourceKind: ImportedStatementBatch["sourceKind"],
+  ) {
+    return importMerchants
+      .filter((merchant) => merchant.status !== "disabled" && merchant.sourceKind === sourceKind)
+      .map((merchant) => {
+        const bestAliasScore = Math.max(
+          0,
+          ...merchant.aliases.map((alias) => {
+            const normalizedAlias = normalizeImportedDescription(alias);
+            if (!normalizedAlias) {
+              return 0;
+            }
+
+            if (normalizedDescription.includes(normalizedAlias)) {
+              return 1;
+            }
+
+            return getImportSimilarity(normalizedDescription, normalizedAlias);
+          }),
+        );
+
+        return { merchant, score: bestAliasScore };
+      })
+      .filter(({ score }) => score >= 0.34)
+      .sort((left, right) => {
+        if (right.score !== left.score) {
+          return right.score - left.score;
+        }
+
+        return right.merchant.supportCount - left.merchant.supportCount;
+      })[0];
+  }
+
+  function getImportMerchantLabel(merchantId?: string) {
+    return importMerchants.find((merchant) => merchant.id === merchantId)?.name ?? "Lugar nao identificado";
+  }
+
+  function getImportedStatementInstitution(text: string, fileName: string) {
+    const ofxOrg = decodeImportedText(text.match(/<ORG>([^\r\n<]+)/i)?.[1] ?? "").trim();
+    if (ofxOrg) {
+      return ofxOrg;
+    }
+
+    if (fileName.toLowerCase().startsWith("nu_")) {
+      return "Nubank";
+    }
+
+    return undefined;
+  }
+
+  async function readImportedStatementFile(file: File) {
+    const buffer = await file.arrayBuffer();
+    const decoders: Array<[string, TextDecoderOptions?]> = [
+      ["utf-8", { fatal: true }],
+      ["windows-1252"],
+      ["iso-8859-1"],
+    ];
+
+    for (const [encoding, options] of decoders) {
+      try {
+        return new TextDecoder(encoding, options).decode(buffer);
+      } catch {
+        // Try the next common bank statement encoding.
+      }
+    }
+
+    return file.text();
+  }
+
   function buildImportedItem(
     batchId: string,
     rawDescription: string,
@@ -1495,12 +1640,15 @@ export function FinanceApp() {
     const importCard = cardId ? cards.find((card) => card.id === cardId) : undefined;
     const statementMonth =
       sourceKind === "credit_card" ? getSuggestedCardStatementMonth(importCard, date, date.slice(0, 7)) : undefined;
+    const detectedMerchant = getDetectedImportMerchant(normalizedDescription, sourceKind)?.merchant;
     const learningRule = getApprovedImportLearningRule(normalizedDescription, sourceKind);
     const suggestedMatch =
+      detectedMerchant?.suggestedMatch ??
       learningRule?.suggestedMatch ??
       getSuggestedImportMatch(normalizedDescription, amount, date, direction, sourceKind);
     const sourceId = accountId ?? cardId ?? sourceKind;
-    const fingerprint = buildImportFingerprint(date, amount, normalizedDescription, sourceId);
+    const naturalFingerprint = buildImportFingerprint(date, amount, normalizedDescription, sourceId);
+    const fingerprint = buildImportFingerprint(date, amount, normalizedDescription, sourceId, options?.externalItemId);
     const hasExistingTransaction = transactions.some(
       (transaction) =>
         buildImportFingerprint(
@@ -1508,31 +1656,43 @@ export function FinanceApp() {
           transaction.amount,
           normalizeImportedDescription(transaction.title || transaction.description || ""),
           transaction.accountId ?? transaction.cardId ?? "unknown",
-        ) === fingerprint,
+        ) === naturalFingerprint,
     );
-    const hasExistingImport = importedStatementItems.some((item) => item.fingerprint === fingerprint);
+    const hasExistingImport = importedStatementItems.some((item) => {
+      const itemNaturalFingerprint = buildImportFingerprint(
+        item.date,
+        item.amount,
+        item.normalizedDescription,
+        item.accountId ?? item.cardId ?? item.sourceKind,
+      );
+      return item.fingerprint === fingerprint || itemNaturalFingerprint === naturalFingerprint;
+    });
 
     return {
       id: crypto.randomUUID(),
       batchId,
       rawDescription,
+      reviewTitle: detectedMerchant?.name ?? rawDescription,
       normalizedDescription,
       date,
       amount,
       direction,
       sourceKind,
       transport: options?.transport ?? "manual_upload",
-      paymentMethod: learningRule?.paymentMethod ?? paymentMethod,
+      paymentMethod: detectedMerchant?.paymentMethod ?? learningRule?.paymentMethod ?? paymentMethod,
       accountId,
       cardId,
       externalItemId: options?.externalItemId,
       originLabel: options?.originLabel,
       suggestedCategoryId:
-        learningRule?.suggestedCategoryId ?? getSuggestedImportCategoryId(normalizedDescription, transactionType),
-      suggestedTransactionType: learningRule?.suggestedTransactionType ?? transactionType,
+        detectedMerchant?.suggestedCategoryId ??
+        learningRule?.suggestedCategoryId ??
+        getSuggestedImportCategoryId(normalizedDescription, transactionType),
+      suggestedTransactionType: detectedMerchant?.suggestedTransactionType ?? learningRule?.suggestedTransactionType ?? transactionType,
       statementMonth,
       appliedLearningRuleId: learningRule?.id,
-      confidence: hasExistingTransaction || hasExistingImport ? 0.98 : learningRule ? 0.86 : suggestedMatch?.confidence ?? 0.62,
+      detectedMerchantId: detectedMerchant?.id,
+      confidence: hasExistingTransaction || hasExistingImport ? 0.98 : detectedMerchant ? 0.9 : learningRule ? 0.86 : suggestedMatch?.confidence ?? 0.62,
       status: hasExistingTransaction || hasExistingImport ? "duplicate" : "pending",
       fingerprint,
       suggestedMatch: hasExistingTransaction
@@ -1566,15 +1726,19 @@ export function FinanceApp() {
           const block = match[1];
           const date = parseImportDate(block.match(/<DTPOSTED>([^\r\n<]+)/i)?.[1] ?? "");
           const amount = parseImportAmount(block.match(/<TRNAMT>([^\r\n<]+)/i)?.[1] ?? "");
+          const fitId = decodeImportedText(block.match(/<FITID>([^\r\n<]+)/i)?.[1] ?? "").trim();
           const description =
-            block.match(/<MEMO>([^\r\n<]+)/i)?.[1] ??
-            block.match(/<NAME>([^\r\n<]+)/i)?.[1] ??
+            decodeImportedText(
+              block.match(/<MEMO>([^\r\n<]+)/i)?.[1] ??
+                block.match(/<NAME>([^\r\n<]+)/i)?.[1] ??
+                "",
+            ) ||
             "Lancamento OFX";
           return buildImportedItem(batchId, description, date, amount, sourceKind, {
             transport: options?.transport,
             accountId: options?.accountId,
             cardId: options?.cardId,
-            externalItemId: options?.externalSourceId ? `${options.externalSourceId}:${date}:${amount}:${description}` : undefined,
+            externalItemId: fitId || (options?.externalSourceId ? `${options.externalSourceId}:${date}:${amount}:${description}` : undefined),
             originLabel: options?.originLabel,
           });
         })
@@ -1594,6 +1758,7 @@ export function FinanceApp() {
     const dateIndex = hasHeader ? findIndex(["DATA", "DATE", "DTPOSTED"]) : -1;
     const descriptionIndex = hasHeader ? findIndex(["DESCRICAO", "DESCRIPTION", "HISTORICO", "MEMO", "NAME"]) : -1;
     const amountIndex = hasHeader ? findIndex(["VALOR", "AMOUNT", "TRNAMT"]) : -1;
+    const identifierIndex = hasHeader ? findIndex(["IDENTIFICADOR", "IDENTIFIER", "ID", "FITID", "CODIGO"]) : -1;
 
     return dataLines
       .map((line) => {
@@ -1607,7 +1772,7 @@ export function FinanceApp() {
 
         return buildImportedItem(
           batchId,
-          columns[inferredDescriptionIndex] ?? "Lancamento importado",
+          decodeImportedText(columns[inferredDescriptionIndex] ?? "Lancamento importado"),
           parseImportDate(columns[inferredDateIndex] ?? ""),
           parseImportAmount(columns[inferredAmountIndex] ?? ""),
           sourceKind,
@@ -1615,7 +1780,12 @@ export function FinanceApp() {
             transport: options?.transport,
             accountId: options?.accountId,
             cardId: options?.cardId,
-            externalItemId: options?.externalSourceId ? `${options.externalSourceId}:${line}` : undefined,
+            externalItemId:
+              identifierIndex >= 0 && columns[identifierIndex]
+                ? decodeImportedText(columns[identifierIndex]).trim()
+                : options?.externalSourceId
+                  ? `${options.externalSourceId}:${line}`
+                  : undefined,
             originLabel: options?.originLabel,
           },
         );
@@ -1695,6 +1865,7 @@ export function FinanceApp() {
       return;
     }
 
+    const sourceInstitution = getImportedStatementInstitution(text, fileName);
     const dates = parsedItems.map((item) => item.date).sort((left, right) => left.localeCompare(right));
     const batch: ImportedStatementBatch = {
       id: batchId,
@@ -1702,6 +1873,7 @@ export function FinanceApp() {
       fileType: fileName.toLowerCase().endsWith(".ofx") ? "ofx" : "csv",
       sourceKind,
       transport,
+      sourceInstitution,
       accountId: sourceKind === "credit_card" ? undefined : accountId,
       cardId: sourceKind === "credit_card" ? cardId : undefined,
       externalSourceId,
@@ -1742,7 +1914,7 @@ export function FinanceApp() {
     setImportError(null);
 
     try {
-      const text = await file.text();
+      const text = await readImportedStatementFile(file);
       createImportedStatementBatchFromText({
         text,
         fileName: file.name,
@@ -1817,6 +1989,87 @@ export function FinanceApp() {
             })()
           : rule,
       );
+    });
+  }
+
+  function registerImportMerchantChoice(
+    item: ImportedStatementItem,
+    nextTransaction: Transaction,
+    match?: ImportedStatementItem["suggestedMatch"],
+  ) {
+    const alias = getImportMerchantAlias(item.normalizedDescription);
+    const merchantName = nextTransaction.title.trim();
+    if (!alias || !merchantName) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    setImportMerchants((current) => {
+      const existing =
+        (item.detectedMerchantId ? current.find((merchant) => merchant.id === item.detectedMerchantId) : undefined) ??
+        current.find(
+          (merchant) =>
+            merchant.sourceKind === item.sourceKind &&
+            (merchant.name.toLowerCase() === merchantName.toLowerCase() ||
+              merchant.aliases.some((currentAlias) => normalizeImportedDescription(currentAlias) === alias)),
+        );
+
+      if (!existing) {
+        return [
+          {
+            id: crypto.randomUUID(),
+            name: merchantName,
+            aliases: [alias],
+            sourceKind: item.sourceKind,
+            suggestedCategoryId: nextTransaction.categoryId,
+            suggestedTransactionType: nextTransaction.type,
+            paymentMethod: nextTransaction.paymentMethod,
+            suggestedMatch: match,
+            supportCount: 1,
+            mistakeCount: 0,
+            status: "suggested",
+            createdAt: now,
+            updatedAt: now,
+          },
+          ...current,
+        ];
+      }
+
+      return current.map((merchant) => {
+        if (merchant.id !== existing.id) {
+          return merchant;
+        }
+
+        const isCorrection =
+          item.detectedMerchantId === merchant.id &&
+          (merchant.name !== merchantName ||
+            merchant.suggestedCategoryId !== nextTransaction.categoryId ||
+            merchant.suggestedTransactionType !== nextTransaction.type ||
+            merchant.paymentMethod !== nextTransaction.paymentMethod ||
+            getImportMatchValue(merchant.suggestedMatch) !== getImportMatchValue(match));
+        const nextMistakeCount = isCorrection ? merchant.mistakeCount + 1 : merchant.mistakeCount;
+        const nextSupportCount = merchant.supportCount + 1;
+
+        return {
+          ...merchant,
+          name: merchantName,
+          aliases: Array.from(new Set([...merchant.aliases, alias])),
+          suggestedCategoryId: nextTransaction.categoryId,
+          suggestedTransactionType: nextTransaction.type,
+          paymentMethod: nextTransaction.paymentMethod,
+          suggestedMatch: match,
+          supportCount: nextSupportCount,
+          mistakeCount: nextMistakeCount,
+          status:
+            nextMistakeCount >= 3
+              ? "disabled"
+              : merchant.status === "approved" || nextSupportCount >= 2
+                ? "approved"
+                : "suggested",
+          updatedAt: now,
+          lastAppliedAt: item.detectedMerchantId === merchant.id ? now : merchant.lastAppliedAt,
+        };
+      });
     });
   }
 
@@ -1917,6 +2170,45 @@ export function FinanceApp() {
     );
   }
 
+  function handleUpdateImportMerchant(merchantId: string, patch: Partial<ImportMerchant>) {
+    const now = new Date().toISOString();
+    setImportMerchants((current) =>
+      current.map((merchant) =>
+        merchant.id === merchantId
+          ? {
+              ...merchant,
+              ...patch,
+              updatedAt: now,
+            }
+          : merchant,
+      ),
+    );
+  }
+
+  function handleApplyImportMerchantToItem(itemId: string, merchantId: string) {
+    const merchant = importMerchants.find((current) => current.id === merchantId);
+    if (!merchant) {
+      return;
+    }
+
+    setImportedStatementItems((current) =>
+      current.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              detectedMerchantId: merchant.id,
+              reviewTitle: merchant.name,
+              suggestedCategoryId: merchant.suggestedCategoryId ?? item.suggestedCategoryId,
+              suggestedTransactionType: merchant.suggestedTransactionType ?? item.suggestedTransactionType,
+              paymentMethod: merchant.paymentMethod ?? item.paymentMethod,
+              suggestedMatch: merchant.suggestedMatch ?? item.suggestedMatch,
+              confidence: Math.max(item.confidence, merchant.status === "approved" ? 0.9 : 0.78),
+            }
+          : item,
+      ),
+    );
+  }
+
   function handleUpdateImportAutomationConfig(
     configId: string,
     patch: Partial<ImportAutomationConfig>,
@@ -1977,9 +2269,10 @@ export function FinanceApp() {
     const linkedPlannedPurchaseId =
       item.suggestedMatch?.kind === "planned_purchase" ? item.suggestedMatch.targetId : undefined;
     const isCardBillPayment = item.suggestedMatch?.kind === "card_bill_payment";
+    const transactionTitle = item.reviewTitle?.trim() || item.rawDescription;
     const nextTransaction: Transaction = {
       id: crypto.randomUUID(),
-      title: item.rawDescription,
+      title: transactionTitle,
       type: item.suggestedTransactionType ?? (item.direction === "inflow" ? "income" : "expense"),
       amount: item.amount,
       date: item.date,
@@ -2001,12 +2294,13 @@ export function FinanceApp() {
       cardMode: !isCardBillPayment && paymentMethod === "credit_card" ? "credit" : !isCardBillPayment && paymentMethod === "debit_card" ? "debit" : undefined,
       sourceBillId,
       linkedPlannedPurchaseId,
-      description: `IMPORT:${item.batchId}:${item.id}${item.suggestedMatch ? `;MATCH:${item.suggestedMatch.kind}:${item.suggestedMatch.targetId}` : ""}`,
+      description: `IMPORT:${item.batchId}:${item.id}${item.suggestedMatch ? `;MATCH:${item.suggestedMatch.kind}:${item.suggestedMatch.targetId}` : ";HISTORY_ONLY"};RAW:${item.rawDescription}`,
     };
 
     setTransactions((current) => [nextTransaction, ...current].sort((left, right) => right.date.localeCompare(left.date)));
     applyImportedItemMatch(item, nextTransaction);
     registerImportLearningChoice(item, nextTransaction, item.suggestedMatch);
+    registerImportMerchantChoice(item, nextTransaction, item.suggestedMatch);
     setImportedStatementItems((current) => {
       const nextItems = current.map((currentItem) =>
         currentItem.id === itemId
@@ -2051,6 +2345,7 @@ export function FinanceApp() {
       importedStatementBatches,
       importedStatementItems,
       importLearningRules,
+      importMerchants,
       importAutomationConfigs,
       settings,
       monthlyPlansByMonth,
@@ -2070,6 +2365,7 @@ export function FinanceApp() {
       importedStatementBatches,
       importedStatementItems,
       importLearningRules,
+      importMerchants,
       importAutomationConfigs,
       settings,
       monthlyPlansByMonth,
@@ -2156,6 +2452,7 @@ export function FinanceApp() {
     if (persisted.importedStatementBatches) setImportedStatementBatches(persisted.importedStatementBatches);
     if (persisted.importedStatementItems) setImportedStatementItems(persisted.importedStatementItems);
     if (persisted.importLearningRules) setImportLearningRules(persisted.importLearningRules);
+    if (persisted.importMerchants) setImportMerchants(persisted.importMerchants);
     if (persisted.importAutomationConfigs) {
       setImportAutomationConfigs([
         ...persisted.importAutomationConfigs,
@@ -4667,9 +4964,170 @@ export function FinanceApp() {
     setIsCommitmentModalOpen(true);
   }
 
+  function openCommitmentEditorFromGrid(row: MonthlyGridRow, monthValue = selectedMonth) {
+    const amount = row.amountByMonth[monthValue] ?? 0;
+    const amountByMonth = Object.fromEntries(
+      salaryCalendarMonths.map((monthItem) => [
+        monthItem.monthValue,
+        row.amountByMonth[monthItem.monthValue] ? String(row.amountByMonth[monthItem.monthValue]) : "",
+      ]),
+    );
+    const baseDraft: DraftCommitment = {
+      ...initialDraftCommitment,
+      title: row.title,
+      kind: row.section === "Ganhos" ? "income" : "expense",
+      schedule: "once",
+      categoryId: row.categoryId,
+      totalAmount: amount > 0 ? String(amount) : "",
+      installmentAmount: amount > 0 ? String(amount) : "",
+      installments: "1",
+      startDate: `${monthValue}-01`,
+      paymentMethod:
+        row.paymentMethod === "credit_card" || row.paymentMethod === "debit_card"
+          ? "card"
+          : row.paymentMethod === "bank_transfer" || row.paymentMethod === "cash"
+            ? row.paymentMethod
+            : "pix",
+      cardId: row.cardId ?? settings.defaultCardId,
+      cardMode: row.cardMode ?? (row.paymentMethod === "debit_card" ? "debit" : "credit"),
+      notes: row.notes ?? "",
+      amountByMonth,
+    };
+
+    if (row.sourceType === "card_auto_bill") {
+      const card = cards.find((item) => item.id === row.sourceId);
+      setEditingCommitmentTarget({ sourceType: "card_auto_bill", sourceId: row.sourceId, monthValue });
+      setDraftCommitment({
+        ...baseDraft,
+        title: `Fatura ${card?.name ?? "cartao"}`,
+        kind: "expense",
+        schedule: "once",
+        categoryId: defaultBillCategoryId,
+        startDate: getCardBillDueDate(row.sourceId, monthValue),
+        paymentMethod: "bank_transfer",
+        cardId: row.sourceId,
+        cardMode: "credit",
+        notes: "Estimativa manual da fatura. O valor real sera conciliado pela importacao.",
+      });
+      setIsCommitmentModalOpen(true);
+      return;
+    }
+
+    if (row.linkedDebtId) {
+      const debt = debts.find((item) => item.id === row.linkedDebtId);
+      if (debt) {
+        setEditingCommitmentTarget({ sourceType: "debt", sourceId: debt.id, monthValue });
+        setDraftCommitment({
+          ...baseDraft,
+          title: debt.name,
+          kind: "expense",
+          schedule: "installments",
+          categoryId: row.categoryId,
+          totalAmount: String(debt.totalAmount),
+          installmentAmount: String(debt.installmentAmount),
+          installments: String(debt.totalInstallments),
+          startDate: debt.nextDueDate,
+          paymentMethod: debt.plannedPaymentMethod ?? "pix",
+          cardId: debt.plannedCardId ?? settings.defaultCardId,
+          cardMode: "credit",
+          notes: debt.description ?? "",
+        });
+        setIsCommitmentModalOpen(true);
+        return;
+      }
+    }
+
+    if (row.sourceType === "planned_purchase") {
+      const purchase = plannedPurchases.find((item) => item.id === row.sourceId);
+      if (purchase) {
+        setEditingCommitmentTarget({ sourceType: "planned_purchase", sourceId: purchase.id, monthValue });
+        setDraftCommitment({
+          ...baseDraft,
+          title: purchase.name,
+          kind: "expense",
+          schedule: purchase.planningMode === "card_parcelado" ? "installments" : "saving_goal",
+          categoryId: row.categoryId,
+          totalAmount: String(purchase.estimatedValue),
+          installmentAmount: String(purchase.suggestedPeriodAmount || amount || purchase.estimatedValue),
+          installments: String(purchase.plannedInstallments ?? 1),
+          startDate: purchase.desiredDate ?? `${monthValue}-28`,
+          paymentMethod: purchase.plannedPaymentMethod ?? "pix",
+          cardId: purchase.plannedCardId ?? settings.defaultCardId,
+          cardMode: purchase.plannedCardMode ?? "credit",
+          notes: purchase.notes ?? purchase.description ?? "",
+        });
+        setIsCommitmentModalOpen(true);
+        return;
+      }
+    }
+
+    const fixedEntry = fixedEntries.find((item) => item.id === row.sourceId);
+    if (fixedEntry) {
+      setEditingCommitmentTarget({ sourceType: "fixed", sourceId: fixedEntry.id, monthValue });
+      setDraftCommitment({
+        ...baseDraft,
+        kind: fixedEntry.kind,
+        schedule: "recurring",
+        categoryId: fixedEntry.categoryId,
+        startDate: `${monthValue}-01`,
+        notes: fixedEntry.notes ?? "",
+      });
+      setIsCommitmentModalOpen(true);
+      return;
+    }
+
+    const bill = bills.find((item) => item.id === row.sourceId);
+    if (bill) {
+      setEditingCommitmentTarget({ sourceType: "bill", sourceId: bill.id, monthValue });
+      setDraftCommitment({
+        ...baseDraft,
+        title: bill.title,
+        kind: "expense",
+        schedule: bill.isRecurring ? "recurring" : "once",
+        categoryId: bill.categoryId,
+        totalAmount: String(bill.amount),
+        installmentAmount: String(bill.amount),
+        installments: String(bill.installments ?? 1),
+        startDate: bill.dueDate,
+        paymentMethod: bill.plannedPaymentMethod ?? "pix",
+        cardId: bill.plannedCardId ?? settings.defaultCardId,
+        cardMode: bill.plannedCardMode ?? "credit",
+        notes: bill.notes ?? "",
+      });
+      setIsCommitmentModalOpen(true);
+    }
+  }
+
   function closeCommitmentModal() {
     setDraftCommitment(initialDraftCommitment);
+    setEditingCommitmentTarget(null);
+    setPendingCommitmentConversion(null);
     setIsCommitmentModalOpen(false);
+  }
+
+  function getCardBillDueDate(cardId: string, monthValue: string) {
+    const card = cards.find((item) => item.id === cardId);
+    const dueDate = monthValueToDate(monthValue);
+    dueDate.setDate(Math.min(card?.dueDay ?? 10, 28));
+    return `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, "0")}-${String(
+      dueDate.getDate(),
+    ).padStart(2, "0")}`;
+  }
+
+  function getDraftCommitmentMonthlyAmounts() {
+    return Object.fromEntries(
+      salaryCalendarMonths.map((monthItem) => {
+        const parsedAmount = Number(draftCommitment.amountByMonth[monthItem.monthValue]?.replace(",", ".") || 0);
+        return [monthItem.monthValue, Math.max(0, Number((parsedAmount || 0).toFixed(2)))];
+      }),
+    ) as Record<string, number>;
+  }
+
+  function getActiveDraftCommitmentMonths() {
+    const amounts = getDraftCommitmentMonthlyAmounts();
+    return salaryCalendarMonths
+      .map((monthItem) => monthItem.monthValue)
+      .filter((monthValue) => (amounts[monthValue] ?? 0) > 0);
   }
 
   function closeBillModal() {
@@ -4902,8 +5360,328 @@ export function FinanceApp() {
     }
   }
 
+  function persistEditedCommitment(target: CommitmentEditTarget) {
+    const title = draftCommitment.title.trim();
+    const totalAmount = Number(draftCommitment.totalAmount.replace(",", ".")) || 0;
+    const rawInstallments = Math.max(1, Number(draftCommitment.installments.replace(",", ".")) || 1);
+    const installmentAmount =
+      Number(draftCommitment.installmentAmount.replace(",", ".")) ||
+      (rawInstallments > 0 ? Number((totalAmount / rawInstallments).toFixed(2)) : totalAmount);
+    const category =
+      categories.find((item) => item.id === draftCommitment.categoryId) ??
+      categories.find((item) => item.type === draftCommitment.kind && !isHiddenUiCategoryId(item.id)) ??
+      categories[0];
+    const monthValue = draftCommitment.startDate.slice(0, 7) || target.monthValue;
+    const monthlyAmounts = getDraftCommitmentMonthlyAmounts();
+    const activeMonths = getActiveDraftCommitmentMonths();
+    const monthlyTotal = activeMonths.reduce((sum, activeMonth) => sum + (monthlyAmounts[activeMonth] ?? 0), 0);
+    const hasMonthlyAmounts = Object.keys(draftCommitment.amountByMonth).length > 0;
+    const primaryAmount = hasMonthlyAmounts ? monthlyAmounts[monthValue] || monthlyAmounts[target.monthValue] || totalAmount : totalAmount;
+
+    if (!title || !category || Math.max(totalAmount, primaryAmount, monthlyTotal) <= 0) {
+      return false;
+    }
+
+    if (target.sourceType === "card_auto_bill") {
+      salaryCalendarMonths.forEach((monthItem) => {
+        if (Object.prototype.hasOwnProperty.call(draftCommitment.amountByMonth, monthItem.monthValue)) {
+          handleUpdateCardBillEstimate(target.sourceId, monthItem.monthValue, String(monthlyAmounts[monthItem.monthValue] ?? 0));
+        }
+      });
+      closeCommitmentModal();
+      return true;
+    }
+
+    if (target.sourceType === "planned_purchase") {
+      const plannedAmountByMonth = hasMonthlyAmounts
+        ? monthlyAmounts
+        : Object.fromEntries(
+            Array.from({ length: draftCommitment.schedule === "installments" ? rawInstallments : 1 }, (_, index) => [
+              getMonthValueOffset(monthValue, index),
+              draftCommitment.schedule === "installments" ? installmentAmount : installmentAmount || totalAmount,
+            ]),
+          ) as Record<string, number>;
+
+      setPlannedPurchases((current) =>
+        current.map((purchase) =>
+          purchase.id === target.sourceId
+            ? {
+                ...purchase,
+                name: title,
+                description: draftCommitment.notes.trim() || undefined,
+                estimatedValue: totalAmount,
+                desiredDate: draftCommitment.startDate,
+                targetMonth: monthValue,
+                scheduleType: "month",
+                specificMonthTarget: true,
+                suggestedPeriodAmount: installmentAmount || totalAmount,
+                plannedAmountByMonth,
+                planningMode:
+                  draftCommitment.schedule === "installments" &&
+                  draftCommitment.paymentMethod === "card" &&
+                  draftCommitment.cardMode === "credit"
+                    ? "card_parcelado"
+                    : "save_over_time",
+                plannedPaymentMethod: draftCommitment.paymentMethod,
+                plannedCardId: draftCommitment.paymentMethod === "card" ? draftCommitment.cardId : undefined,
+                plannedCardMode: draftCommitment.paymentMethod === "card" ? draftCommitment.cardMode : undefined,
+                plannedInstallments: draftCommitment.schedule === "installments" ? rawInstallments : undefined,
+                notes: draftCommitment.notes.trim() || undefined,
+              }
+            : purchase,
+        ),
+      );
+      closeCommitmentModal();
+      return true;
+    }
+
+    if (target.sourceType === "debt") {
+      const safePaid = Math.max(0, Math.min(totalAmount, debts.find((debt) => debt.id === target.sourceId)?.paidAmount ?? 0));
+      const nextDebt: Debt = {
+        ...(debts.find((debt) => debt.id === target.sourceId) ?? {
+          id: target.sourceId,
+          paidAmount: 0,
+          paidInstallments: 0,
+          priority: "Alta",
+          status: "active",
+        } as Debt),
+        name: title,
+        description: draftCommitment.notes.trim() || undefined,
+        totalAmount,
+        paidAmount: safePaid,
+        remainingAmount: Math.max(0, totalAmount - safePaid),
+        totalInstallments: rawInstallments,
+        paidInstallments: Math.min(rawInstallments, Math.floor(safePaid / Math.max(installmentAmount, 1))),
+        installmentAmount,
+        nextDueDate: draftCommitment.startDate,
+        plannedPaymentMethod: draftCommitment.paymentMethod,
+        plannedCardId: draftCommitment.paymentMethod === "card" ? draftCommitment.cardId : undefined,
+      };
+      const linkedEntry = buildFixedEntryFromDebt(nextDebt);
+
+      setDebts((current) => current.map((debt) => (debt.id === target.sourceId ? nextDebt : debt)));
+      if (linkedEntry) {
+        setFixedEntries((current) =>
+          current.map((entry) => (entry.linkedDebtId === target.sourceId ? { ...linkedEntry, id: entry.id } : entry)),
+        );
+      }
+      closeCommitmentModal();
+      return true;
+    }
+
+    if (target.sourceType === "fixed") {
+      const paymentDetails = getPlannedPaymentDetails(
+        draftCommitment.paymentMethod,
+        draftCommitment.cardId,
+        draftCommitment.cardMode,
+        cards,
+      );
+      const amountByMonth = hasMonthlyAmounts
+        ? monthlyAmounts
+        : Object.fromEntries(
+            salaryCalendarMonths.map((monthItem) => [
+              monthItem.monthValue,
+              monthItem.monthValue >= monthValue ? totalAmount : 0,
+            ]),
+          ) as Record<string, number>;
+      const nextEntry = fixedEntries.find((entry) => entry.id === target.sourceId);
+
+      setFixedEntries((current) =>
+        current.map((entry) =>
+          entry.id === target.sourceId
+            ? {
+                ...entry,
+                title,
+                kind: draftCommitment.kind,
+                section: draftCommitment.kind === "income" ? "Ganhos" : "Contas",
+                categoryId: category.id,
+                categoryName: category.name,
+                amountByMonth,
+                paymentMethod: paymentDetails.transactionMethod,
+                cardId: paymentDetails.cardId,
+                cardMode: paymentDetails.cardMode,
+                notes: draftCommitment.notes.trim() || undefined,
+              }
+            : entry,
+        ),
+      );
+
+      if (nextEntry?.linkedBillGroupId) {
+        setBills((current) =>
+          current.map((bill) =>
+            (bill.recurringGroupId ?? bill.id) === nextEntry.linkedBillGroupId
+              ? {
+                  ...bill,
+                  title,
+                  amount: amountByMonth[bill.dueDate.slice(0, 7)] ?? totalAmount,
+                  categoryId: category.id,
+                  categoryName: category.name,
+                  plannedPaymentMethod: draftCommitment.paymentMethod,
+                  plannedCardId: draftCommitment.paymentMethod === "card" ? draftCommitment.cardId : undefined,
+                  plannedCardMode: draftCommitment.paymentMethod === "card" ? draftCommitment.cardMode : undefined,
+                  notes: draftCommitment.notes.trim() || undefined,
+                }
+              : bill,
+          ),
+        );
+      }
+      closeCommitmentModal();
+      return true;
+    }
+
+    if (target.sourceType === "bill" && activeMonths.length > 1 && !pendingCommitmentConversion) {
+      setPendingCommitmentConversion({ target, activeMonths });
+      return false;
+    }
+
+    setBills((current) =>
+      current.map((bill) =>
+        bill.id === target.sourceId
+          ? {
+              ...bill,
+              title,
+              amount: primaryAmount,
+              categoryId: category.id,
+              categoryName: category.name,
+              dueDate: `${activeMonths[0] ?? monthValue}-${draftCommitment.startDate.slice(8, 10) || "01"}`,
+              isRecurring: draftCommitment.schedule === "recurring",
+              plannedPaymentMethod: draftCommitment.paymentMethod,
+              plannedCardId: draftCommitment.paymentMethod === "card" ? draftCommitment.cardId : undefined,
+              plannedCardMode: draftCommitment.paymentMethod === "card" ? draftCommitment.cardMode : undefined,
+              installments: draftCommitment.schedule === "installments" ? rawInstallments : 1,
+              notes: draftCommitment.notes.trim() || undefined,
+            }
+          : bill,
+      ),
+    );
+    closeCommitmentModal();
+    return true;
+  }
+
+  function handleConfirmCommitmentConversion(kind: CommitmentConversionKind) {
+    if (!pendingCommitmentConversion) {
+      return;
+    }
+
+    const { target, activeMonths } = pendingCommitmentConversion;
+    const title = draftCommitment.title.trim();
+    const monthlyAmounts = getDraftCommitmentMonthlyAmounts();
+    const totalAmount =
+      Number(draftCommitment.totalAmount.replace(",", ".")) ||
+      activeMonths.reduce((sum, monthValue) => sum + (monthlyAmounts[monthValue] ?? 0), 0);
+    const category =
+      categories.find((item) => item.id === draftCommitment.categoryId) ??
+      categories.find((item) => item.type === draftCommitment.kind && !isHiddenUiCategoryId(item.id)) ??
+      categories[0];
+    const firstMonth = activeMonths[0] ?? draftCommitment.startDate.slice(0, 7) ?? selectedMonth;
+    const day = draftCommitment.startDate.slice(8, 10) || "01";
+    const firstAmount = monthlyAmounts[firstMonth] || Number((totalAmount / Math.max(activeMonths.length, 1)).toFixed(2));
+
+    if (!title || !category || totalAmount <= 0) {
+      return;
+    }
+
+    setBills((current) => current.filter((bill) => bill.id !== target.sourceId));
+
+    if (kind === "recurring") {
+      const paymentDetails = getPlannedPaymentDetails(
+        draftCommitment.paymentMethod,
+        draftCommitment.cardId,
+        draftCommitment.cardMode,
+        cards,
+      );
+      const nextEntry: FixedFlowEntry = {
+        id: `fixed-${crypto.randomUUID()}`,
+        section: draftCommitment.kind === "income" ? "Ganhos" : "Contas",
+        title,
+        kind: draftCommitment.kind,
+        categoryId: category.id,
+        categoryName: category.name,
+        amountByMonth: monthlyAmounts,
+        completedMonths: [],
+        paymentMethod: paymentDetails.transactionMethod,
+        accountId: settings.defaultAccountId,
+        cardId: paymentDetails.cardId,
+        cardMode: paymentDetails.cardMode,
+        notes: draftCommitment.notes.trim() || undefined,
+      };
+
+      setFixedEntries((current) => [nextEntry, ...current]);
+      closeCommitmentModal();
+      return;
+    }
+
+    if (
+      kind === "installment" &&
+      draftCommitment.paymentMethod === "card" &&
+      draftCommitment.cardMode === "credit"
+    ) {
+      const nextPurchase: PlannedPurchase = {
+        id: `purchase-${crypto.randomUUID()}`,
+        name: title,
+        description: draftCommitment.notes.trim() || undefined,
+        estimatedValue: totalAmount,
+        priority: "Alta",
+        desiredDate: `${firstMonth}-${day}`,
+        targetMonth: firstMonth,
+        scheduleType: "month",
+        specificMonthTarget: true,
+        boardColumn: firstMonth === selectedMonth ? "this_month" : "later",
+        savedAmount: 0,
+        suggestedPeriodAmount: firstAmount,
+        plannedAmountByMonth: monthlyAmounts,
+        status: "planned",
+        planningMode: "card_parcelado",
+        plannedPaymentMethod: "card",
+        plannedCardId: draftCommitment.cardId,
+        plannedCardMode: "credit",
+        plannedInstallments: activeMonths.length,
+        notes: draftCommitment.notes.trim() || undefined,
+      };
+
+      setPlannedPurchases((current) => [nextPurchase, ...current]);
+      closeCommitmentModal();
+      return;
+    }
+
+    const nextDebt: Debt = {
+      id: `debt-${crypto.randomUUID()}`,
+      name: title,
+      description: draftCommitment.notes.trim() || undefined,
+      totalAmount,
+      paidAmount: 0,
+      remainingAmount: totalAmount,
+      totalInstallments: Math.max(1, activeMonths.length),
+      paidInstallments: 0,
+      installmentAmount: firstAmount,
+      nextDueDate: `${firstMonth}-${day}`,
+      priority: "Alta",
+      status: "active",
+      plannedPaymentMethod: draftCommitment.paymentMethod,
+      plannedCardId: draftCommitment.paymentMethod === "card" ? draftCommitment.cardId : undefined,
+    };
+    const linkedEntry = buildFixedEntryFromDebt(nextDebt);
+
+    setDebts((current) => [nextDebt, ...current]);
+    if (linkedEntry) {
+      setFixedEntries((current) => [
+        {
+          ...linkedEntry,
+          amountByMonth: monthlyAmounts,
+        },
+        ...current,
+      ]);
+    }
+    closeCommitmentModal();
+  }
+
   function handleSaveCommitment(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    if (editingCommitmentTarget) {
+      persistEditedCommitment(editingCommitmentTarget);
+      return;
+    }
 
     const title = draftCommitment.title.trim();
     const totalAmount = Number(draftCommitment.totalAmount.replace(",", ".")) || 0;
@@ -5718,27 +6496,6 @@ export function FinanceApp() {
       });
 
     return [...fixedRows, ...standaloneBillRows, ...cardAutoRows, ...purchaseRows];
-  }
-
-  function createFixedEntryDraft(section: FixedFlowSection, entry?: FixedFlowEntry): DraftFixedEntry {
-    return {
-      section: normalizeFixedSection(section),
-      title: entry?.title ?? "",
-      categoryId: entry?.categoryId ?? getDefaultCategoryIdForFixedSection(section),
-      paymentMethod: entry?.paymentMethod ?? (section === "Ganhos" ? "pix" : "pix"),
-      accountId: entry?.accountId ?? settings.defaultAccountId,
-      cardId: entry?.cardId ?? settings.defaultCardId,
-      cardMode: entry?.cardMode ?? "credit",
-      syncCardLimit: entry?.syncCardLimit ?? false,
-      notes: entry?.notes ?? "",
-      amountByMonth: createFixedEntryAmountDraft(referenceMonthDate, entry),
-    };
-  }
-
-  function openFixedEntryModal(section: FixedFlowSection, entry?: FixedFlowEntry) {
-    setEditingFixedEntryId(entry?.id ?? null);
-    setDraftFixedEntry(createFixedEntryDraft(normalizeFixedSection(section), entry));
-    setIsFixedEntryModalOpen(true);
   }
 
   function closeFixedEntryModal() {
@@ -6715,30 +7472,7 @@ export function FinanceApp() {
   }
 
   function openMonthlyGridRowModal(row: MonthlyGridRow) {
-    if (row.sourceType === "card_auto_bill") {
-      openCardDetails(row.sourceId, selectedMonth);
-      return;
-    }
-
-    if (row.sourceType === "planned_purchase") {
-      const purchase = plannedPurchases.find((item) => item.id === row.sourceId);
-      openPurchaseModal(purchase);
-      return;
-    }
-
-    const entry = fixedEntries.find((item) => item.id === row.sourceId);
-    if (!entry) {
-      const bill = bills.find((item) => item.id === row.sourceId);
-      if (bill) {
-        openBillModal(bill);
-      }
-      return;
-    }
-
-    openFixedEntryModal(normalizeFixedSection(entry.section), {
-      ...entry,
-      section: normalizeFixedSection(entry.section),
-    });
+    openCommitmentEditorFromGrid(row, selectedMonth);
   }
 
   function beginMonthlyGridDrag(rowId: string, monthValue: string) {
@@ -7418,6 +8152,12 @@ export function FinanceApp() {
                 const transactionType = item.suggestedTransactionType ?? (item.direction === "inflow" ? "income" : "expense");
                 const importMatchOptions = getImportMatchOptions(item);
                 const selectedMatchValue = getImportMatchValue(item.suggestedMatch);
+                const merchantOptions = [
+                  { value: "none", label: "Sem lugar" },
+                  ...importMerchants
+                    .filter((merchant) => merchant.status !== "disabled" && merchant.sourceKind === item.sourceKind)
+                    .map((merchant) => ({ value: merchant.id, label: merchant.name })),
+                ];
                 const matchOptions = importMatchOptions.some((option) => option.value === selectedMatchValue)
                   ? importMatchOptions
                   : [
@@ -7465,11 +8205,50 @@ export function FinanceApp() {
                             Regra aprendida aplicada.
                           </p>
                         ) : null}
+                        {item.detectedMerchantId ? (
+                          <p className="mt-1 text-xs font-medium text-sky-700">
+                            Lugar detectado: {getImportMerchantLabel(item.detectedMerchantId)}.
+                          </p>
+                        ) : null}
                       </div>
                       <p className="text-lg font-semibold text-slate-900">{formatCurrency(item.amount)}</p>
                     </div>
 
-                    <div className="mt-4 grid gap-3 md:grid-cols-4">
+                    <div className="mt-4 grid gap-3 md:grid-cols-5">
+                      <FormField label="Titulo no historico">
+                        <input
+                          value={item.reviewTitle ?? item.rawDescription}
+                          onChange={(event) =>
+                            setImportedStatementItems((current) =>
+                              current.map((currentItem) =>
+                                currentItem.id === item.id
+                                  ? { ...currentItem, reviewTitle: event.target.value }
+                                  : currentItem,
+                              ),
+                            )
+                          }
+                          placeholder="Ex: Pix para aluguel"
+                          className="field bg-white"
+                        />
+                      </FormField>
+                      <FormField label="Lugar">
+                        <CustomSelect
+                          value={item.detectedMerchantId ?? "none"}
+                          onChange={(value) => {
+                            if (value === "none") {
+                              setImportedStatementItems((current) =>
+                                current.map((currentItem) =>
+                                  currentItem.id === item.id ? { ...currentItem, detectedMerchantId: undefined } : currentItem,
+                                ),
+                              );
+                              return;
+                            }
+
+                            handleApplyImportMerchantToItem(item.id, value);
+                          }}
+                          options={merchantOptions}
+                        />
+                      </FormField>
                       <FormField label="Categoria">
                         <CustomSelect
                           value={item.suggestedCategoryId ?? ""}
@@ -7642,6 +8421,113 @@ export function FinanceApp() {
           </div>
         </Panel>
 
+        <Panel title="Lugares aprendidos" description="Estabelecimentos, pessoas e destinos que o sistema reconhece nos extratos e faturas.">
+          <div className="space-y-3">
+            {importMerchants.length ? (
+              importMerchants
+                .slice()
+                .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+                .map((merchant) => {
+                  const merchantType = merchant.suggestedTransactionType ?? "expense";
+                  const categoryOptions = getCategorySelectOptions(merchantType).map((option) => ({ ...option, icon: Tag }));
+
+                  return (
+                    <div key={merchant.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold text-slate-900">{merchant.name}</p>
+                            <span
+                              className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                merchant.status === "approved"
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : merchant.status === "disabled"
+                                    ? "bg-slate-100 text-slate-500"
+                                    : "bg-amber-100 text-amber-700"
+                              }`}
+                            >
+                              {merchant.status === "approved" ? "Aprovado" : merchant.status === "disabled" ? "Desativado" : "Sugerido"}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {merchant.sourceKind === "credit_card" ? "Cartao" : "Conta"} - {merchant.supportCount} confirmacoes - {merchant.mistakeCount} correcoes
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {merchant.status !== "approved" ? (
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateImportMerchant(merchant.id, { status: "approved", mistakeCount: 0 })}
+                              className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-700"
+                            >
+                              Aprovar
+                            </button>
+                          ) : null}
+                          {merchant.status !== "disabled" ? (
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateImportMerchant(merchant.id, { status: "disabled" })}
+                              className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                            >
+                              Desativar
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1.2fr_0.9fr_0.9fr]">
+                        <FormField label="Nome amigavel">
+                          <input
+                            value={merchant.name}
+                            onChange={(event) => handleUpdateImportMerchant(merchant.id, { name: event.target.value })}
+                            className="field bg-white"
+                          />
+                        </FormField>
+                        <FormField label="Apelidos detectados">
+                          <input
+                            value={merchant.aliases.join(", ")}
+                            onChange={(event) =>
+                              handleUpdateImportMerchant(merchant.id, {
+                                aliases: splitAutomationList(event.target.value).map((alias) =>
+                                  normalizeImportedDescription(alias),
+                                ),
+                              })
+                            }
+                            className="field bg-white"
+                          />
+                        </FormField>
+                        <FormField label="Categoria">
+                          <CustomSelect
+                            value={merchant.suggestedCategoryId ?? ""}
+                            onChange={(value) => handleUpdateImportMerchant(merchant.id, { suggestedCategoryId: value })}
+                            options={categoryOptions.length ? categoryOptions : [{ value: "", label: "Sem categoria", icon: Tag }]}
+                          />
+                        </FormField>
+                        <FormField label="Metodo">
+                          <CustomSelect
+                            value={merchant.paymentMethod ?? "pix"}
+                            onChange={(value) => handleUpdateImportMerchant(merchant.id, { paymentMethod: value as PaymentMethod })}
+                            options={[
+                              { value: "pix", label: "Pix" },
+                              { value: "bank_transfer", label: "Transferencia" },
+                              { value: "debit_card", label: "Debito" },
+                              { value: "credit_card", label: "Credito" },
+                              { value: "cash", label: "Dinheiro" },
+                            ]}
+                          />
+                        </FormField>
+                      </div>
+                    </div>
+                  );
+                })
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                Lugares aparecem aqui depois que voce confirma lancamentos importados com um titulo amigavel.
+              </div>
+            )}
+          </div>
+        </Panel>
+
         <Panel title="Arquivos importados" description="Historico dos batches processados nesta base local.">
           <div className="space-y-3">
             {importedStatementBatches.length ? (
@@ -7653,6 +8539,13 @@ export function FinanceApp() {
                       <p className="mt-1 text-xs text-slate-500">
                         {batch.fileType.toUpperCase()} - {batch.itemCount} itens - {batch.status}
                       </p>
+                      {(batch.sourceInstitution || batch.periodStart || batch.periodEnd) ? (
+                        <p className="mt-1 text-xs text-slate-500">
+                          {[batch.sourceInstitution, batch.periodStart && batch.periodEnd ? `${batch.periodStart} ate ${batch.periodEnd}` : undefined]
+                            .filter(Boolean)
+                            .join(" - ")}
+                        </p>
+                      ) : null}
                     </div>
                     <div className="text-right text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
                       {batch.confirmedCount} confirmados / {batch.duplicateCount} duplicados
@@ -9651,7 +10544,7 @@ export function FinanceApp() {
             <button
               type="button"
               onClick={() => {
-                openMonthlyGridRowModal(row);
+                openCommitmentEditorFromGrid(row, monthValue);
                 closeMonthlyGridCardModal();
               }}
               className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
@@ -9924,6 +10817,12 @@ export function FinanceApp() {
     const installments = Math.max(1, Number(draftCommitment.installments.replace(",", ".")) || 1);
     const totalAmount = Number(draftCommitment.totalAmount.replace(",", ".")) || 0;
     const suggestedInstallment = installments > 0 ? Number((totalAmount / installments).toFixed(2)) : totalAmount;
+    const monthlyAmounts = getDraftCommitmentMonthlyAmounts();
+    const monthlyActiveCount = getActiveDraftCommitmentMonths().length;
+    const monthlyTotal = salaryCalendarMonths.reduce(
+      (sum, monthItem) => sum + (monthlyAmounts[monthItem.monthValue] ?? 0),
+      0,
+    );
     const automaticDestination =
       draftCommitment.kind === "income"
         ? "Ganhos"
@@ -9936,15 +10835,18 @@ export function FinanceApp() {
               : draftCommitment.schedule === "recurring"
                 ? "Contas fixas"
                 : "Contas";
+    const isEditingCommitment = Boolean(editingCommitmentTarget);
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
         <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
           <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
             <div>
-              <p className="text-xs uppercase tracking-[0.24em] text-sky-600">Novo compromisso</p>
+              <p className="text-xs uppercase tracking-[0.24em] text-sky-600">
+                {isEditingCommitment ? "Editar compromisso" : "Novo compromisso"}
+              </p>
               <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                Cadastro inteligente
+                {isEditingCommitment ? "Ajustar item financeiro" : "Cadastro inteligente"}
               </h3>
             </div>
             <button
@@ -10058,6 +10960,54 @@ export function FinanceApp() {
                 </FormField>
               </div>
 
+              {isEditingCommitment ? (
+                <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">
+                        Valores por mes
+                      </p>
+                      <p className="mt-1 text-sm text-slate-600">
+                        {monthlyActiveCount} {monthlyActiveCount === 1 ? "mes preenchido" : "meses preenchidos"} - total {formatCurrency(monthlyTotal)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraftCommitment((current) => ({
+                          ...current,
+                          totalAmount: monthlyTotal > 0 ? String(Number(monthlyTotal.toFixed(2))) : current.totalAmount,
+                        }))
+                      }
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
+                    >
+                      Usar total
+                    </button>
+                  </div>
+                  <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                    {salaryCalendarMonths.map((monthItem) => (
+                      <FormField key={monthItem.monthValue} label={formatMonthLabel(monthValueToDate(monthItem.monthValue))}>
+                        <input
+                          value={draftCommitment.amountByMonth[monthItem.monthValue] ?? ""}
+                          onChange={(event) =>
+                            setDraftCommitment((current) => ({
+                              ...current,
+                              amountByMonth: {
+                                ...current.amountByMonth,
+                                [monthItem.monthValue]: event.target.value,
+                              },
+                            }))
+                          }
+                          inputMode="decimal"
+                          placeholder="0"
+                          className="field bg-white"
+                        />
+                      </FormField>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
               {isInstallment ? (
                 <div className="grid gap-3 sm:grid-cols-2">
                   <FormField label="Quantidade de parcelas">
@@ -10113,7 +11063,8 @@ export function FinanceApp() {
               </FormField>
 
               <div className="rounded-[24px] border border-sky-100 bg-sky-50 px-4 py-4 text-sm text-sky-800">
-                Vai aparecer automaticamente em <span className="font-semibold">{automaticDestination}</span>.
+                {isEditingCommitment ? "Este item permanece" : "Vai aparecer automaticamente"} em{" "}
+                <span className="font-semibold">{automaticDestination}</span>.
               </div>
             </div>
 
@@ -10129,10 +11080,70 @@ export function FinanceApp() {
                 type="submit"
                 className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
               >
-                Salvar
+                {isEditingCommitment ? "Salvar alteracoes" : "Salvar"}
               </button>
             </div>
           </form>
+          {pendingCommitmentConversion ? (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 px-4 py-8 backdrop-blur-sm">
+              <div className="w-full max-w-lg rounded-[28px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.28)]">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-amber-600">
+                      Confirmar mudanca
+                    </p>
+                    <h4 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">
+                      Este item apareceu em mais de um mes
+                    </h4>
+                    <p className="mt-2 text-sm text-slate-500">
+                      Escolha como o sistema deve tratar esse compromisso antes de salvar.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPendingCommitmentConversion(null)}
+                    className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-600 transition hover:bg-slate-200"
+                    aria-label="Fechar confirmacao"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <div className="mt-5 grid gap-3">
+                  <button
+                    type="button"
+                    onClick={() => handleConfirmCommitmentConversion("agreement")}
+                    className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-left transition hover:bg-amber-100"
+                  >
+                    <span className="text-sm font-semibold text-amber-900">Combinado / acordo parcelado</span>
+                    <span className="mt-1 block text-xs text-amber-700">
+                      Vira uma divida/acordo com parcelas por Pix, transferencia ou dinheiro.
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleConfirmCommitmentConversion("recurring")}
+                    className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-left transition hover:bg-sky-100"
+                  >
+                    <span className="text-sm font-semibold text-sky-900">Recorrente</span>
+                    <span className="mt-1 block text-xs text-sky-700">
+                      Vira um item fixo da planilha, com valores mensais editaveis.
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleConfirmCommitmentConversion("installment")}
+                    className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-left transition hover:bg-violet-100"
+                  >
+                    <span className="text-sm font-semibold text-violet-900">Parcelamento</span>
+                    <span className="mt-1 block text-xs text-violet-700">
+                      Se for credito, vira compra parcelada na fatura; senao vira acordo parcelado.
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
     );
