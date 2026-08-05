@@ -662,6 +662,24 @@ function getCardStatementMonthForTransaction(card: Card | undefined, transaction
   return getSuggestedCardStatementMonth(card, transaction.date, transaction.date.slice(0, 7));
 }
 
+function getTransactionDateForCardStatementMonth(card: Card, statementMonth: string) {
+  if (card.closingDay <= 1) {
+    const previousMonthDate = monthValueToDate(getMonthValueOffset(statementMonth, -1));
+    const safeDay = Math.min(15, new Date(previousMonthDate.getFullYear(), previousMonthDate.getMonth() + 1, 0).getDate());
+
+    return `${previousMonthDate.getFullYear()}-${String(previousMonthDate.getMonth() + 1).padStart(2, "0")}-${String(
+      safeDay,
+    ).padStart(2, "0")}`;
+  }
+
+  const statementDate = monthValueToDate(statementMonth);
+  const safeDay = Math.max(1, card.closingDay - 1);
+
+  return `${statementMonth}-${String(
+    Math.min(safeDay, new Date(statementDate.getFullYear(), statementDate.getMonth() + 1, 0).getDate()),
+  ).padStart(2, "0")}`;
+}
+
 function getCardStatementMonthForBill(_card: Card | undefined, bill: Bill) {
   return bill.dueDate.slice(0, 7);
 }
@@ -6392,6 +6410,10 @@ export function FinanceApp() {
     amount: number;
     support: string;
     sortKey: string;
+    sourceType: "transaction" | "bill";
+    sourceId: string;
+    installmentGroupId?: string;
+    installmentTotal?: number;
   };
 
   function getCardStatementGridItems(cardId: string, statementMonth: string): CardStatementGridItem[] {
@@ -6416,16 +6438,25 @@ export function FinanceApp() {
           : sourceBill
             ? "Conta"
             : "Transacao";
+        const installmentKey =
+          transaction.installmentGroupId ??
+          (transaction.installmentTotal
+            ? `${transaction.title}-${transaction.installmentTotal}-${transaction.cardId ?? cardId}`
+            : undefined);
         const sourceLabel = transaction.installmentTotal
-          ? `${baseSourceLabel} - Parcela ${transaction.installmentNumber ?? 1}/${transaction.installmentTotal}`
+          ? `${baseSourceLabel} - Parcelado ${transaction.installmentTotal}x`
           : baseSourceLabel;
 
         return {
-          id: `transaction-${transaction.id}`,
+          id: installmentKey ? `installment-${installmentKey}` : `transaction-${transaction.id}`,
           title: transaction.title,
           amount: getCreditCardTransactionSignedAmount(transaction),
           support: transaction.type === "income" ? `${sourceLabel} - Credito/estorno` : sourceLabel,
           sortKey: `${transaction.date}-${String(index).padStart(4, "0")}`,
+          sourceType: "transaction" as const,
+          sourceId: transaction.id,
+          installmentGroupId: transaction.installmentGroupId ?? installmentKey,
+          installmentTotal: transaction.installmentTotal,
         };
       });
 
@@ -6451,14 +6482,135 @@ export function FinanceApp() {
           getCardStatementMonthForBill(card, bill) === statementMonth,
       )
       .map((bill, index) => ({
-        id: `bill-${bill.id}`,
+        id: bill.recurringGroupId ? `bill-group-${bill.recurringGroupId}` : `bill-${bill.id}`,
         title: bill.title,
         amount: bill.amount,
         support: bill.isRecurring ? "Conta recorrente" : "Conta",
         sortKey: `${bill.dueDate}-${String(index).padStart(4, "0")}`,
+        sourceType: "bill" as const,
+        sourceId: bill.recurringGroupId ?? bill.id,
       }));
 
     return [...transactionItems, ...billItems].sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+  }
+
+  function handleCardStatementGridItemAmountChange(
+    cardId: string,
+    item: CardStatementGridItem,
+    statementMonth: string,
+    rawValue: string,
+  ) {
+    const card = cards.find((current) => current.id === cardId);
+    if (!card) {
+      return;
+    }
+
+    const parsedValue = Number(rawValue.replace(",", ".")) || 0;
+    const nextAmount = Math.max(0, Number(parsedValue.toFixed(2)));
+
+    if (item.sourceType === "transaction") {
+      setTransactions((current) => {
+        const getTransactionInstallmentKey = (transaction: Transaction) =>
+          transaction.installmentGroupId ??
+          (transaction.installmentTotal
+            ? `${transaction.title}-${transaction.installmentTotal}-${transaction.cardId ?? cardId}`
+            : undefined);
+
+        if (item.installmentGroupId) {
+          const groupTransactions = current.filter(
+            (transaction) =>
+              transaction.cardId === cardId &&
+              transaction.cardMode === "credit" &&
+              getTransactionInstallmentKey(transaction) === item.installmentGroupId,
+          );
+          const baseTransaction = groupTransactions.find((transaction) => transaction.id === item.sourceId) ?? groupTransactions[0];
+          const hasTargetMonth = groupTransactions.some(
+            (transaction) => getCardStatementMonthForTransaction(card, transaction) === statementMonth,
+          );
+          const createdTransaction =
+            !hasTargetMonth && baseTransaction && nextAmount > 0
+              ? ({
+                  ...baseTransaction,
+                  id: crypto.randomUUID(),
+                  amount: nextAmount,
+                  date: getTransactionDateForCardStatementMonth(card, statementMonth),
+                  status: "planned",
+                  sourceBillId: undefined,
+                  installmentGroupId: item.installmentGroupId,
+                } satisfies Transaction)
+              : null;
+          const nextTransactions = current.map((transaction) => {
+            const transactionInstallmentKey = getTransactionInstallmentKey(transaction);
+
+            if (transactionInstallmentKey !== item.installmentGroupId) {
+              return transaction;
+            }
+
+            const transactionStatementMonth = getCardStatementMonthForTransaction(card, transaction);
+
+            return {
+              ...transaction,
+              amount: transactionStatementMonth === statementMonth ? nextAmount : transaction.amount,
+              installmentGroupId: item.installmentGroupId,
+            };
+          });
+          const nextWithCreated = createdTransaction ? [...nextTransactions, createdTransaction] : nextTransactions;
+          const normalizedGroup = nextWithCreated
+            .filter(
+              (transaction) =>
+                transaction.cardId === cardId &&
+                transaction.cardMode === "credit" &&
+                getTransactionInstallmentKey(transaction) === item.installmentGroupId,
+            )
+            .sort((left, right) => {
+              const leftMonth = getCardStatementMonthForTransaction(card, left);
+              const rightMonth = getCardStatementMonthForTransaction(card, right);
+              return `${leftMonth}-${left.date}`.localeCompare(`${rightMonth}-${right.date}`);
+            });
+          const installmentTotal = normalizedGroup.length;
+          const installmentNumbersById = new Map(
+            normalizedGroup.map((transaction, index) => [transaction.id, index + 1]),
+          );
+
+          return nextWithCreated.map((transaction) => {
+            const installmentNumber = installmentNumbersById.get(transaction.id);
+
+            return installmentNumber
+              ? {
+                  ...transaction,
+                  installmentGroupId: item.installmentGroupId,
+                  installmentNumber,
+                  installmentTotal,
+                }
+              : transaction;
+          });
+        }
+
+        return current.map((transaction) => {
+          const transactionStatementMonth =
+            transaction.cardId === cardId && transaction.cardMode === "credit"
+              ? getCardStatementMonthForTransaction(card, transaction)
+              : "";
+
+          return transaction.id === item.sourceId && transactionStatementMonth === statementMonth
+            ? { ...transaction, amount: nextAmount }
+            : transaction;
+        });
+      });
+      return;
+    }
+
+    setBills((current) =>
+      current.map((bill) => {
+        const billStatementMonth =
+          isCreditLinkedBill(bill) && bill.plannedCardId === cardId
+            ? getCardStatementMonthForBill(card, bill)
+            : "";
+        const isTargetBill = bill.recurringGroupId ? bill.recurringGroupId === item.sourceId : bill.id === item.sourceId;
+
+        return isTargetBill && billStatementMonth === statementMonth ? { ...bill, amount: nextAmount } : bill;
+      }),
+    );
   }
 
   function createMonthlyGridRows(): MonthlyGridRow[] {
@@ -9253,10 +9405,7 @@ export function FinanceApp() {
                                                   monthItem.monthValue === selectedMonth ? "ring-1 ring-sky-200" : ""
                                                 }`}
                                               >
-                                                <button
-                                                  type="button"
-                                                  onClick={() => openCardDetails(row.sourceId, monthItem.monthValue)}
-                                                  disabled={itemAmount === 0}
+                                                <div
                                                   className={`flex min-h-[54px] w-full flex-col justify-between rounded-[16px] px-2 py-2 text-left transition ${
                                                     itemAmount === 0
                                                       ? "cursor-default bg-white/60 text-slate-300"
@@ -9265,13 +9414,29 @@ export function FinanceApp() {
                                                         : "bg-rose-50 text-rose-700 hover:bg-rose-100"
                                                   }`}
                                                 >
-                                                  <span className="text-[11px] font-semibold leading-tight">
-                                                    {itemAmount !== 0 ? formatCurrency(itemAmount) : "-"}
-                                                  </span>
-                                                  <span className="text-[9px] font-semibold uppercase tracking-[0.12em]">
+                                                  <input
+                                                    value={itemAmount > 0 ? String(itemAmount) : ""}
+                                                    onChange={(event) =>
+                                                      handleCardStatementGridItemAmountChange(
+                                                        row.sourceId,
+                                                        item,
+                                                        monthItem.monthValue,
+                                                        event.target.value,
+                                                      )
+                                                    }
+                                                    inputMode="decimal"
+                                                    placeholder="0"
+                                                    className="w-full bg-transparent text-[11px] font-semibold leading-tight outline-none placeholder:text-current/40"
+                                                  />
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => openCardDetails(row.sourceId, monthItem.monthValue)}
+                                                    disabled={itemAmount === 0}
+                                                    className="mt-1 w-fit text-[9px] font-semibold uppercase tracking-[0.12em] transition hover:opacity-75 disabled:cursor-default disabled:opacity-60"
+                                                  >
                                                     {itemAmount !== 0 ? "Abrir" : "Sem valor"}
-                                                  </span>
-                                                </button>
+                                                  </button>
+                                                </div>
                                               </td>
                                             );
                                           })}
