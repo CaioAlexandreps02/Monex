@@ -254,6 +254,23 @@ type DraftDebtPlan = {
   installmentAmount: string;
 };
 
+type CommitmentSchedule = "once" | "recurring" | "installments" | "saving_goal";
+
+type DraftCommitment = {
+  title: string;
+  kind: "expense" | "income";
+  schedule: CommitmentSchedule;
+  categoryId: string;
+  totalAmount: string;
+  installmentAmount: string;
+  installments: string;
+  startDate: string;
+  paymentMethod: PaymentPlanMethod;
+  cardId: string;
+  cardMode: CardMode;
+  notes: string;
+};
+
 type DraftAccount = {
   name: string;
   type: string;
@@ -546,6 +563,21 @@ const initialDraftDebtPlan: DraftDebtPlan = {
   installmentAmount: "",
 };
 
+const initialDraftCommitment: DraftCommitment = {
+  title: "",
+  kind: "expense",
+  schedule: "once",
+  categoryId: "cat-bills",
+  totalAmount: "",
+  installmentAmount: "",
+  installments: "1",
+  startDate: `${initialMonth}-20`,
+  paymentMethod: "pix",
+  cardId: "card-nubank",
+  cardMode: "credit",
+  notes: "",
+};
+
 const initialDraftAccount: DraftAccount = {
   name: "",
   type: "Conta corrente",
@@ -696,15 +728,15 @@ const fixedSectionDisplayLabels: Record<FixedFlowSection, string> = {
   Contas: "Contas",
   Planejamento: "Contas",
   "Gastos fixos": "Contas fixas",
-  "Dividas e repasses": "Dividas",
+  "Dividas e repasses": "Dividas e acordos",
   "Compras planejadas": "Compras planejadas",
 };
 
-type ContasSubType = "Contas fixas" | "Dividas" | "Compras planejadas" | "Faturas";
+type ContasSubType = "Contas fixas" | "Dividas e acordos" | "Compras planejadas" | "Faturas";
 
 const contasSubTypeOrder: ContasSubType[] = [
   "Contas fixas",
-  "Dividas",
+  "Dividas e acordos",
   "Compras planejadas",
   "Faturas",
 ];
@@ -719,7 +751,7 @@ function getContasSubType(row: MonthlyGridRow): ContasSubType {
   }
 
   if (row.linkedDebtId) {
-    return "Dividas";
+    return "Dividas e acordos";
   }
 
   return "Contas fixas";
@@ -1088,6 +1120,7 @@ export function FinanceApp() {
   const [draftBillError, setDraftBillError] = useState<string | null>(null);
   const [draftDebt, setDraftDebt] = useState(initialDraftDebt);
   const [draftDebtPlan, setDraftDebtPlan] = useState(initialDraftDebtPlan);
+  const [draftCommitment, setDraftCommitment] = useState(initialDraftCommitment);
   const [draftAccount, setDraftAccount] = useState(initialDraftAccount);
   const [draftFixedEntry, setDraftFixedEntry] = useState<DraftFixedEntry>(() => ({
     ...initialDraftFixedEntry,
@@ -1112,6 +1145,7 @@ export function FinanceApp() {
   const [isBillModalOpen, setIsBillModalOpen] = useState(false);
   const [isDebtModalOpen, setIsDebtModalOpen] = useState(false);
   const [isDebtPlanModalOpen, setIsDebtPlanModalOpen] = useState(false);
+  const [isCommitmentModalOpen, setIsCommitmentModalOpen] = useState(false);
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [isFixedEntryModalOpen, setIsFixedEntryModalOpen] = useState(false);
   const [isInvestmentModalOpen, setIsInvestmentModalOpen] = useState(false);
@@ -2390,7 +2424,6 @@ export function FinanceApp() {
         .filter(([, amount]) => amount > 0)
         .map(([statementMonth, amount]) => {
           const dueDate = monthValueToDate(statementMonth);
-          dueDate.setMonth(dueDate.getMonth() + 1);
           dueDate.setDate(Math.min(card.dueDay, 28));
 
           const dueDateValue = `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, "0")}-${String(
@@ -2455,10 +2488,6 @@ export function FinanceApp() {
     return getCardBillAutoEstimatedAmount(cardId, monthValue);
   }
 
-  function getCardBillPaymentMarker(cardId: string, monthValue: string) {
-    return `CARD_BILL_PAYMENT:${cardId}:${monthValue}`;
-  }
-
   function openCardBillComparison(cardId: string, monthValue: string) {
     setSelectedCardBillComparison({ cardId, monthValue });
   }
@@ -2498,87 +2527,6 @@ export function FinanceApp() {
         isAutoEstimate: true,
         status: current[key]?.status ?? "pending",
         paidTransactionId: current[key]?.paidTransactionId,
-      },
-    }));
-  }
-
-  function handleToggleCardBillPaid(cardId: string, monthValue: string) {
-    const card = cards.find((item) => item.id === cardId);
-    if (!card) {
-      return;
-    }
-
-    const key = getCardBillEstimateKey(cardId, monthValue);
-    const marker = getCardBillPaymentMarker(cardId, monthValue);
-    const currentEstimate = cardBillEstimates[key];
-    const isPaid = currentEstimate?.status === "paid";
-
-    if (isPaid) {
-      setTransactions((current) =>
-        current.filter(
-          (transaction) =>
-            transaction.id !== currentEstimate?.paidTransactionId && transaction.description !== marker,
-        ),
-      );
-      setCardBillEstimates((current) => ({
-        ...current,
-        [key]: {
-          cardId,
-          monthValue,
-          estimatedAmount: current[key]?.estimatedAmount ?? getCardBillGridAmount(cardId, monthValue),
-          isAutoEstimate: current[key]?.isAutoEstimate ?? true,
-          status: "pending",
-        },
-      }));
-      return;
-    }
-
-    const realAmount = getCardBillRealAmount(cardId, monthValue);
-    if (realAmount <= 0) {
-      return;
-    }
-
-    const autoBill = autoCardBills.find((item) => item.cardId === cardId && item.statementMonth === monthValue);
-    const dueDate = autoBill?.bill.dueDate ?? `${monthValue}-14`;
-    const paymentTransaction: Transaction = {
-      id: currentEstimate?.paidTransactionId ?? crypto.randomUUID(),
-      title: `Pagamento fatura ${card.name}`,
-      type: "expense",
-      amount: realAmount,
-      date: dueDate,
-      categoryId: "cat-bills",
-      categoryName: "Fatura do cartao",
-      paymentMethod: settings.defaultBillPaymentMethod === "card" ? "pix" : settings.defaultBillPaymentMethod,
-      status: "paid",
-      expenseKind: "basic_bill",
-      accountId: card.linkedAccountId ?? settings.defaultAccountId,
-      description: marker,
-    };
-
-    setTransactions((current) => {
-      const existingIndex = current.findIndex(
-        (transaction) =>
-          transaction.id === currentEstimate?.paidTransactionId || transaction.description === marker,
-      );
-
-      if (existingIndex >= 0) {
-        return current
-          .map((transaction, index) => (index === existingIndex ? { ...transaction, ...paymentTransaction } : transaction))
-          .sort((left, right) => right.date.localeCompare(left.date));
-      }
-
-      return [paymentTransaction, ...current].sort((left, right) => right.date.localeCompare(left.date));
-    });
-
-    setCardBillEstimates((current) => ({
-      ...current,
-      [key]: {
-        cardId,
-        monthValue,
-        estimatedAmount: current[key]?.estimatedAmount ?? getCardBillGridAmount(cardId, monthValue),
-        isAutoEstimate: current[key]?.isAutoEstimate ?? true,
-        status: "paid",
-        paidTransactionId: paymentTransaction.id,
       },
     }));
   }
@@ -2679,10 +2627,16 @@ export function FinanceApp() {
 
     return sourceTransactions
       .filter(
-        (transaction) =>
-          transaction.cardId === cardId &&
-          transaction.cardMode === "credit" &&
-          months.has(getCardStatementMonthForTransaction(card, transaction)),
+        (transaction) => {
+          if (transaction.cardId !== cardId || transaction.cardMode !== "credit") {
+            return false;
+          }
+
+          const statementMonth = getCardStatementMonthForTransaction(card, transaction);
+          const billEstimate = cardBillEstimates[getCardBillEstimateKey(cardId, statementMonth)];
+
+          return months.has(statementMonth) && billEstimate?.status !== "paid";
+        },
       )
       .reduce((sum, transaction) => sum + getCreditCardTransactionSignedAmount(transaction), 0);
   };
@@ -2696,10 +2650,10 @@ export function FinanceApp() {
       return { committed: 0, available: 0, limit: 0 };
     }
 
-    const committed = getOpenCardStatementTotal(cardId, fromMonthValue, sourceTransactions, 18);
+    const committed = Math.max(0, getOpenCardStatementTotal(cardId, fromMonthValue, sourceTransactions, 18));
     return {
       committed,
-      available: Number((card.creditLimit - committed).toFixed(2)),
+      available: Number(Math.min(card.creditLimit, card.creditLimit - committed).toFixed(2)),
       limit: card.creditLimit,
     };
   };
@@ -2725,7 +2679,7 @@ export function FinanceApp() {
 
       const { committed, limit } = getCardAvailableLimit(cardId, fromMonthValue, nextTransactions);
       if (committed > limit + 0.009) {
-        return `O limite de ${card.name} seria ultrapassado. Proximas 12 faturas: ${formatCurrency(
+        return `O limite de ${card.name} seria ultrapassado. Faturas abertas: ${formatCurrency(
           committed,
         )} de ${formatCurrency(limit)}.`;
       }
@@ -2733,10 +2687,15 @@ export function FinanceApp() {
 
     return null;
   };
-  const cardSummaries = getCardSummaries(cards, transactions, referenceMonthDate).map((card) => ({
-    ...card,
-    availableLimit: Math.max(0, getCardAvailableLimit(card.id, selectedMonth).available),
-  }));
+  const cardSummaries = getCardSummaries(cards, transactions, referenceMonthDate).map((card) => {
+    const limitSnapshot = getCardAvailableLimit(card.id, selectedMonth);
+
+    return {
+      ...card,
+      creditUsed: limitSnapshot.committed,
+      availableLimit: Math.max(0, limitSnapshot.available),
+    };
+  });
   const upcomingInstallments = getUpcomingInstallments(
     transactions,
     new Date(`${referenceDate}T12:00:00`),
@@ -3209,17 +3168,83 @@ export function FinanceApp() {
     });
   }, [hasLoadedPersistedState, investments, categories, salaryCalendarMonths, settings.defaultAccountId]);
 
+  const buildFixedEntryFromDebt = useCallback((debt: Debt, existingEntry?: FixedFlowEntry): FixedFlowEntry | null => {
+    const debtCategory =
+      categories.find((item) => item.id === "cat-debt") ??
+      categories.find((item) => item.name === "Dividas") ??
+      categories.find((item) => item.type === "expense") ??
+      categories[0];
+
+    if (!debtCategory || debt.remainingAmount <= 0 || debt.status === "settled") {
+      return null;
+    }
+
+    const startMonth = debt.nextDueDate.slice(0, 7) || selectedMonth;
+    const installmentAmount = Math.max(0.01, debt.installmentAmount || debt.remainingAmount);
+    const monthCount = Math.max(1, Math.ceil(debt.remainingAmount / installmentAmount));
+    const { schedule } = buildDebtPlanSchedule(
+      startMonth,
+      debt.remainingAmount,
+      monthCount,
+      installmentAmount,
+    );
+    const existingHasSchedule = Object.values(existingEntry?.amountByMonth ?? {}).some((amount) => amount > 0);
+    const amountByMonth = existingHasSchedule
+      ? existingEntry?.amountByMonth ?? {}
+      : (() => {
+          const knownMonths = new Set([
+            ...salaryCalendarMonths.map((monthItem) => monthItem.monthValue),
+            ...Object.keys(existingEntry?.amountByMonth ?? {}),
+            ...schedule.map((item) => item.monthValue),
+          ]);
+          const nextAmountByMonth = Object.fromEntries(
+            [...knownMonths].map((monthValue) => [monthValue, 0]),
+          ) as Record<string, number>;
+
+          schedule.forEach((item) => {
+            nextAmountByMonth[item.monthValue] = item.amount;
+          });
+
+          return nextAmountByMonth;
+        })();
+
+    const paymentDetails = getPlannedPaymentDetails(
+      debt.plannedPaymentMethod,
+      debt.plannedCardId,
+      "credit",
+      cards,
+    );
+
+    return {
+      id: existingEntry?.id ?? `fixed-debt-${debt.id}`,
+      section: "Contas",
+      title: debt.name,
+      kind: "expense",
+      categoryId: debtCategory.id,
+      categoryName: debtCategory.name,
+      amountByMonth,
+      completedMonths: (existingEntry?.completedMonths ?? []).filter(
+        (monthValue) => (amountByMonth[monthValue] ?? 0) > 0,
+      ),
+      paymentMethod: paymentDetails.transactionMethod,
+      accountId: existingEntry?.accountId ?? settings.defaultAccountId,
+      cardId: paymentDetails.cardId,
+      cardMode: paymentDetails.cardMode,
+      linkedBillGroupId: undefined,
+      linkedDebtId: debt.id,
+      linkedInvestmentId: undefined,
+      syncCardLimit: false,
+      manualAmountMonths: existingEntry?.manualAmountMonths ?? [],
+      notes: debt.description ?? existingEntry?.notes,
+    };
+  }, [cards, categories, salaryCalendarMonths, selectedMonth, settings.defaultAccountId]);
+
   useEffect(() => {
     if (!hasLoadedPersistedState) {
       return;
     }
 
     setFixedEntries((currentEntries) => {
-      const debtCategory =
-        categories.find((item) => item.id === "cat-debt") ??
-        categories.find((item) => item.name === "Dividas") ??
-        categories.find((item) => item.type === "expense") ??
-        categories[0];
       const nextEntries = currentEntries.map((entry) => {
         if (!entry.linkedDebtId) {
           return entry;
@@ -3230,37 +3255,31 @@ export function FinanceApp() {
           return entry;
         }
 
-        const paymentDetails = getPlannedPaymentDetails(
-          linkedDebt.plannedPaymentMethod,
-          linkedDebt.plannedCardId,
-          "credit",
-          cards,
-        );
+        const syncedEntry = buildFixedEntryFromDebt(linkedDebt, entry);
 
-        return {
-          ...entry,
-          section: "Contas" as FixedFlowSection,
-          title: linkedDebt.name,
-          categoryId: debtCategory?.id ?? entry.categoryId,
-          categoryName: debtCategory?.name ?? entry.categoryName,
-          paymentMethod: paymentDetails.transactionMethod,
-          accountId: entry.accountId ?? settings.defaultAccountId,
-          cardId: paymentDetails.cardId,
-          cardMode: paymentDetails.cardMode,
-          notes: linkedDebt.description ?? entry.notes,
-        };
+        return syncedEntry ?? entry;
       });
 
       const debtIds = new Set(debts.map((debt) => debt.id));
       const filteredEntries = nextEntries.filter(
         (entry) => !entry.linkedDebtId || debtIds.has(entry.linkedDebtId),
       );
+      const existingDebtEntryIds = new Set(
+        filteredEntries
+          .map((entry) => entry.linkedDebtId)
+          .filter((value): value is string => Boolean(value)),
+      );
+      const missingDebtEntries = debts
+        .filter((debt) => debt.status !== "settled" && debt.remainingAmount > 0 && !existingDebtEntryIds.has(debt.id))
+        .map((debt) => buildFixedEntryFromDebt(debt))
+        .filter((entry): entry is FixedFlowEntry => Boolean(entry));
+      const syncedEntries = [...missingDebtEntries, ...filteredEntries];
 
-      return JSON.stringify(filteredEntries) === JSON.stringify(currentEntries)
+      return JSON.stringify(syncedEntries) === JSON.stringify(currentEntries)
         ? currentEntries
-        : filteredEntries;
+        : syncedEntries;
     });
-  }, [hasLoadedPersistedState, debts, categories, cards, settings.defaultAccountId]);
+  }, [hasLoadedPersistedState, debts, buildFixedEntryFromDebt]);
 
   function rebuildTransactionsForBills(currentTransactions: Transaction[], nextBillsGroup: Bill[]) {
     const billIds = new Set(nextBillsGroup.map((bill) => bill.id));
@@ -4624,22 +4643,33 @@ export function FinanceApp() {
     setIsBillModalOpen(true);
   }
 
-  function openNewAccountModal(kind: AccountEntryKind = "bill") {
-    setNewAccountKind(kind);
-    setEditingBillId(null);
-    setEditingDebtId(null);
-    setDraftBill(createBillDraft());
-    setDraftBillError(null);
-    setDraftDebt(initialDraftDebt);
-    setIsNewAccountModalOpen(true);
-  }
-
   function closeNewAccountModal() {
     setIsNewAccountModalOpen(false);
     setNewAccountKind("bill");
     setDraftBill(createBillDraft());
     setDraftBillError(null);
     setDraftDebt(initialDraftDebt);
+  }
+
+  function openCommitmentModal(overrides: Partial<DraftCommitment> = {}) {
+    const nextKind = overrides.kind ?? initialDraftCommitment.kind;
+    const fallbackCategory =
+      categories.find((category) => category.type === nextKind && !isHiddenUiCategoryId(category.id)) ??
+      categories.find((category) => category.type === nextKind) ??
+      categories[0];
+
+    setDraftCommitment({
+      ...initialDraftCommitment,
+      categoryId: fallbackCategory?.id ?? initialDraftCommitment.categoryId,
+      cardId: settings.defaultCardId,
+      ...overrides,
+    });
+    setIsCommitmentModalOpen(true);
+  }
+
+  function closeCommitmentModal() {
+    setDraftCommitment(initialDraftCommitment);
+    setIsCommitmentModalOpen(false);
   }
 
   function closeBillModal() {
@@ -4872,6 +4902,209 @@ export function FinanceApp() {
     }
   }
 
+  function handleSaveCommitment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const title = draftCommitment.title.trim();
+    const totalAmount = Number(draftCommitment.totalAmount.replace(",", ".")) || 0;
+    const rawInstallments = Math.max(1, Number(draftCommitment.installments.replace(",", ".")) || 1);
+    const installmentAmount =
+      Number(draftCommitment.installmentAmount.replace(",", ".")) ||
+      (rawInstallments > 0 ? Number((totalAmount / rawInstallments).toFixed(2)) : totalAmount);
+    const category =
+      categories.find((item) => item.id === draftCommitment.categoryId) ??
+      categories.find((item) => item.type === draftCommitment.kind && !isHiddenUiCategoryId(item.id)) ??
+      categories[0];
+    const monthValue = draftCommitment.startDate.slice(0, 7) || selectedMonth;
+
+    if (!title || !category || totalAmount <= 0) {
+      return;
+    }
+
+    if (draftCommitment.schedule === "saving_goal") {
+      const nextPurchase: PlannedPurchase = {
+        id: `purchase-${crypto.randomUUID()}`,
+        name: title,
+        description: draftCommitment.notes.trim() || undefined,
+        estimatedValue: totalAmount,
+        priority: "Alta",
+        desiredDate: draftCommitment.startDate,
+        targetMonth: monthValue,
+        scheduleType: "month",
+        specificMonthTarget: true,
+        boardColumn: monthValue === selectedMonth ? "this_month" : "later",
+        savedAmount: 0,
+        suggestedPeriodAmount: installmentAmount || totalAmount,
+        plannedAmountByMonth: { [monthValue]: installmentAmount || totalAmount },
+        status: "planned",
+        planningMode: "save_over_time",
+        plannedPaymentMethod: draftCommitment.paymentMethod,
+        plannedCardId: draftCommitment.paymentMethod === "card" ? draftCommitment.cardId : undefined,
+        plannedCardMode: draftCommitment.paymentMethod === "card" ? draftCommitment.cardMode : undefined,
+        notes: draftCommitment.notes.trim() || undefined,
+      };
+
+      setPlannedPurchases((current) => [nextPurchase, ...current]);
+      closeCommitmentModal();
+      return;
+    }
+
+    if (draftCommitment.schedule === "installments") {
+      if (draftCommitment.paymentMethod === "card" && draftCommitment.cardMode === "credit") {
+        const installmentValue = Number((totalAmount / rawInstallments).toFixed(2));
+        const plannedAmountByMonth = Object.fromEntries(
+          Array.from({ length: rawInstallments }, (_, index) => [
+            getMonthValueOffset(monthValue, index),
+            installmentValue,
+          ]),
+        ) as Record<string, number>;
+        const nextPurchase: PlannedPurchase = {
+          id: `purchase-${crypto.randomUUID()}`,
+          name: title,
+          description: draftCommitment.notes.trim() || undefined,
+          estimatedValue: totalAmount,
+          priority: "Alta",
+          desiredDate: draftCommitment.startDate,
+          targetMonth: monthValue,
+          scheduleType: "month",
+          specificMonthTarget: true,
+          boardColumn: monthValue === selectedMonth ? "this_month" : "later",
+          savedAmount: 0,
+          suggestedPeriodAmount: installmentValue,
+          plannedAmountByMonth,
+          status: "planned",
+          planningMode: "card_parcelado",
+          plannedPaymentMethod: "card",
+          plannedCardId: draftCommitment.cardId,
+          plannedCardMode: "credit",
+          plannedInstallments: rawInstallments,
+          notes: draftCommitment.notes.trim() || undefined,
+        };
+
+        setPlannedPurchases((current) => [nextPurchase, ...current]);
+        closeCommitmentModal();
+        return;
+      }
+
+      const nextDebt: Debt = {
+        id: `debt-${crypto.randomUUID()}`,
+        name: title,
+        description: draftCommitment.notes.trim() || undefined,
+        totalAmount,
+        paidAmount: 0,
+        remainingAmount: totalAmount,
+        totalInstallments: rawInstallments,
+        paidInstallments: 0,
+        installmentAmount,
+        nextDueDate: draftCommitment.startDate,
+        priority: "Alta",
+        status: "active",
+        plannedPaymentMethod: draftCommitment.paymentMethod,
+        plannedCardId: draftCommitment.paymentMethod === "card" ? draftCommitment.cardId : undefined,
+      };
+      const linkedEntry = buildFixedEntryFromDebt(nextDebt);
+
+      setDebts((current) => [nextDebt, ...current]);
+      if (linkedEntry) {
+        setFixedEntries((current) => [linkedEntry, ...current]);
+      }
+      closeCommitmentModal();
+      return;
+    }
+
+    if (draftCommitment.kind === "income") {
+      const amountByMonth =
+        draftCommitment.schedule === "recurring"
+          ? Object.fromEntries(
+              salaryCalendarMonths.map((monthItem) => [
+                monthItem.monthValue,
+                monthItem.monthValue >= monthValue ? totalAmount : 0,
+              ]),
+            )
+          : { [monthValue]: totalAmount };
+      const nextEntry: FixedFlowEntry = {
+        id: `fixed-${crypto.randomUUID()}`,
+        section: "Ganhos",
+        title,
+        kind: "income",
+        categoryId: category.id,
+        categoryName: category.name,
+        amountByMonth: amountByMonth as Record<string, number>,
+        completedMonths: [],
+        paymentMethod: draftCommitment.paymentMethod === "card" ? "pix" : draftCommitment.paymentMethod,
+        accountId: settings.defaultAccountId,
+        notes: draftCommitment.notes.trim() || undefined,
+      };
+
+      setFixedEntries((current) => [nextEntry, ...current]);
+      closeCommitmentModal();
+      return;
+    }
+
+    if (draftCommitment.schedule === "recurring") {
+      const paymentDetails = getPlannedPaymentDetails(
+        draftCommitment.paymentMethod,
+        draftCommitment.cardId,
+        draftCommitment.cardMode,
+        cards,
+      );
+      const amountByMonth = Object.fromEntries(
+        salaryCalendarMonths.map((monthItem) => [
+          monthItem.monthValue,
+          monthItem.monthValue >= monthValue ? totalAmount : 0,
+        ]),
+      ) as Record<string, number>;
+      const nextEntry: FixedFlowEntry = {
+        id: `fixed-${crypto.randomUUID()}`,
+        section: "Contas",
+        title,
+        kind: "expense",
+        categoryId: category.id,
+        categoryName: category.name,
+        amountByMonth,
+        completedMonths: [],
+        paymentMethod: paymentDetails.transactionMethod,
+        accountId: settings.defaultAccountId,
+        cardId: paymentDetails.cardId,
+        cardMode: paymentDetails.cardMode,
+        notes: draftCommitment.notes.trim() || undefined,
+      };
+
+      setFixedEntries((current) => [nextEntry, ...current]);
+      closeCommitmentModal();
+      return;
+    }
+
+    const paymentConfig = mapFixedPaymentMethodToBillPlan(
+      draftCommitment.paymentMethod === "card"
+        ? draftCommitment.cardMode === "debit"
+          ? "debit_card"
+          : "credit_card"
+        : draftCommitment.paymentMethod,
+      draftCommitment.cardId,
+      draftCommitment.cardMode,
+    );
+    const nextBill: Bill = {
+      id: `bill-${crypto.randomUUID()}`,
+      title,
+      amount: totalAmount,
+      categoryId: category.id,
+      categoryName: category.name,
+      dueDate: draftCommitment.startDate,
+      priority: "Alta",
+      isRecurring: false,
+      status: "pending",
+      plannedPaymentMethod: paymentConfig.plannedPaymentMethod,
+      plannedCardId: paymentConfig.plannedCardId,
+      plannedCardMode: paymentConfig.plannedCardMode,
+      installments: 1,
+      notes: draftCommitment.notes.trim() || undefined,
+    };
+
+    setBills((current) => [nextBill, ...current]);
+    closeCommitmentModal();
+  }
+
   function handleDeleteDebt(debtId: string) {
     setDebts((current) => current.filter((debt) => debt.id !== debtId));
     setFixedEntries((current) => current.filter((entry) => entry.linkedDebtId !== debtId));
@@ -4917,8 +5150,9 @@ export function FinanceApp() {
       cards,
     );
     const linkedEntry = getLinkedDebtEntry(debt.id);
+    const scheduleStartMonth = debt.nextDueDate.slice(0, 7) || selectedMonth;
     const { schedule } = buildDebtPlanSchedule(
-      selectedMonth,
+      scheduleStartMonth,
       remainingAmount,
       monthCount,
       installmentAmount,
@@ -4970,7 +5204,7 @@ export function FinanceApp() {
     });
 
     const nextDueDate = alignDateToDay(
-      `${selectedMonth}-01`,
+      `${scheduleStartMonth}-01`,
       Number(debt.nextDueDate.slice(8, 10)) || 1,
     );
 
@@ -5517,20 +5751,6 @@ export function FinanceApp() {
     setIsFixedEntryModalOpen(false);
   }
 
-  function createInlineEntryDraft(section: InlineNewEntry["section"]): InlineNewEntry {
-    return {
-      section,
-      title: "",
-      amountByMonth: Object.fromEntries(
-        salaryCalendarMonths.map((monthItem) => [monthItem.monthValue, ""]),
-      ) as Record<string, string>,
-    };
-  }
-
-  function handleStartInlineNewEntry(section: InlineNewEntry["section"]) {
-    setInlineNewEntry(createInlineEntryDraft(section));
-  }
-
   function handleCancelInlineNewEntry() {
     setInlineNewEntry(null);
   }
@@ -5939,36 +6159,6 @@ export function FinanceApp() {
     closeFixedEntryModal();
   }
 
-  function buildFixedFlowTransaction(entry: FixedFlowEntry, monthValue: string): Transaction {
-    const transactionDate = `${monthValue}-${entry.kind === "income" ? "05" : "12"}`;
-    const amount = entry.amountByMonth[monthValue] ?? 0;
-
-    return {
-      id: crypto.randomUUID(),
-      title: entry.title,
-      type: entry.kind,
-      amount,
-      date: transactionDate,
-      categoryId: entry.categoryId,
-      categoryName: entry.categoryName,
-      paymentMethod: entry.paymentMethod,
-      status: entry.kind === "income" ? "received" : "paid",
-      incomeKind: entry.kind === "income" ? "fixed_received" : undefined,
-      expenseKind:
-        entry.kind === "expense"
-          ? entry.linkedInvestmentId
-            ? "investment"
-            : entry.linkedDebtId || entry.categoryId === "cat-debt"
-            ? "debt_payment"
-            : "fixed"
-          : undefined,
-      accountId: entry.accountId ?? settings.defaultAccountId,
-      cardId: entry.cardId,
-      cardMode: entry.cardMode,
-      description: getFixedEntryMarker(entry.id, monthValue),
-    };
-  }
-
   function getFixedEntryMarker(entryId: string, monthValue: string) {
     return `Monex fixo:${entryId}:${monthValue}`;
   }
@@ -6242,6 +6432,16 @@ export function FinanceApp() {
   }
 
   function handleMonthlyGridAmountChange(row: MonthlyGridRow, monthValue: string, rawValue: string) {
+    if (row.sourceType === "card_auto_bill") {
+      handleUpdateCardBillEstimate(row.sourceId, monthValue, rawValue);
+      return;
+    }
+
+    if (row.sourceType === "planned_purchase") {
+      handlePlannedPurchaseAmountChange(row.sourceId, monthValue, rawValue);
+      return;
+    }
+
     const entry = fixedEntries.find((item) => item.id === row.sourceId);
     if (entry) {
       handleFixedEntryAmountChange(entry.id, monthValue, rawValue);
@@ -6266,280 +6466,6 @@ export function FinanceApp() {
           : item,
       ),
     );
-  }
-
-  function handleToggleFixedEntry(entryId: string, monthValue: string) {
-    const entry = fixedEntries.find((item) => item.id === entryId);
-    const amount = entry?.amountByMonth[monthValue] ?? 0;
-
-    if (!entry || amount <= 0) {
-      return;
-    }
-
-    const marker = getFixedEntryMarker(entry.id, monthValue);
-    const isCompleted = entry.completedMonths.includes(monthValue);
-    const matchingBill = bills.find(
-      (bill) =>
-        bill.title === entry.title &&
-        bill.categoryId === entry.categoryId &&
-        bill.dueDate.slice(0, 7) === monthValue,
-    );
-
-    setFixedEntries((current) =>
-      current.map((item) =>
-        item.id === entryId
-          ? {
-              ...item,
-              completedMonths: isCompleted
-                ? item.completedMonths.filter((value) => value !== monthValue)
-                : [...item.completedMonths, monthValue],
-            }
-          : item,
-      ),
-    );
-
-    if (entry.linkedDebtId) {
-      setDebts((current) =>
-        current.map((debt) => {
-          if (debt.id !== entry.linkedDebtId) {
-            return debt;
-          }
-
-          const nextPaidAmount = Number(
-            Math.max(
-              0,
-              Math.min(
-                debt.totalAmount,
-                debt.paidAmount + (isCompleted ? -amount : amount),
-              ),
-            ).toFixed(2),
-          );
-          const nextPaidInstallments = Math.max(
-            0,
-            Math.min(
-              debt.totalInstallments,
-              debt.paidInstallments + (isCompleted ? -1 : 1),
-            ),
-          );
-          const nextRemainingAmount = Number(
-            Math.max(0, debt.totalAmount - nextPaidAmount).toFixed(2),
-          );
-
-          return {
-            ...debt,
-            paidAmount: nextPaidAmount,
-            paidInstallments: nextPaidInstallments,
-            remainingAmount: nextRemainingAmount,
-            status:
-              nextRemainingAmount === 0
-                ? "settled"
-                : debt.status === "paused"
-                  ? "paused"
-                  : "active",
-          };
-        }),
-      );
-    }
-
-    if (entry.linkedInvestmentId) {
-      const linkedInvestment = investments.find((investment) => investment.id === entry.linkedInvestmentId);
-      if (!linkedInvestment) {
-        return;
-      }
-
-      if (isCompleted) {
-        const monthContributions = linkedInvestment.contributions.filter(
-          (contribution) =>
-            (contribution.monthValue ?? contribution.contributionDate.slice(0, 7)) === monthValue,
-        );
-        const contributionToRemove =
-          monthContributions.find((contribution) => contribution.source === "planilha") ??
-          monthContributions.at(-1);
-
-        if (!contributionToRemove) {
-          return;
-        }
-
-        setInvestments((current) =>
-          current.map((investment) => {
-            if (investment.id !== linkedInvestment.id) {
-              return investment;
-            }
-
-            const nextContributions = investment.contributions.filter(
-              (contribution) => contribution.id !== contributionToRemove.id,
-            );
-            const totalGrossInvested = Number(
-              nextContributions.reduce((sum, contribution) => sum + contribution.amount, 0).toFixed(2),
-            );
-
-            return {
-              ...investment,
-              totalGrossInvested,
-              contributions: nextContributions,
-            };
-          }),
-        );
-
-        if (contributionToRemove.linkedTransactionId) {
-          setTransactions((current) =>
-            current.filter((transaction) => transaction.id !== contributionToRemove.linkedTransactionId),
-          );
-        }
-
-        return;
-      }
-
-      const transaction = buildInvestmentTransaction(
-        linkedInvestment,
-        amount,
-        `${monthValue}-12`,
-        entry.paymentMethod,
-        entry.accountId,
-        entry.cardId,
-        entry.cardMode,
-        marker,
-      );
-      const nextContribution = {
-        id: crypto.randomUUID(),
-        contributionDate: `${monthValue}-12`,
-        amount,
-        monthValue,
-        source: "planilha" as const,
-        linkedTransactionId: transaction.id,
-        paymentMethod: entry.paymentMethod,
-        accountId: entry.accountId,
-        cardId: entry.cardId,
-        cardMode: entry.cardMode,
-        notes: entry.notes,
-      };
-
-      setTransactions((current) =>
-        [transaction, ...current].sort((left, right) => right.date.localeCompare(left.date)),
-      );
-      setInvestments((current) =>
-        current.map((investment) =>
-          investment.id === linkedInvestment.id
-            ? {
-                ...investment,
-                totalGrossInvested: Number((investment.totalGrossInvested + amount).toFixed(2)),
-                contributions: [...investment.contributions, nextContribution].sort((left, right) =>
-                  left.contributionDate.localeCompare(right.contributionDate),
-                ),
-              }
-            : investment,
-        ),
-      );
-
-      return;
-    }
-
-    if (entry.linkedBillGroupId) {
-      const nextCompletedMonths = isCompleted
-        ? entry.completedMonths.filter((value) => value !== monthValue)
-        : [...entry.completedMonths, monthValue];
-      const nextBillsGroup: Bill[] = bills
-        .filter((bill) => (bill.recurringGroupId ?? bill.id) === entry.linkedBillGroupId)
-        .map((bill) => {
-          const billMonthValue = bill.dueDate.slice(0, 7);
-          return {
-            ...bill,
-            status: (nextCompletedMonths.includes(billMonthValue) ? "paid" : "pending") as Bill["status"],
-            amount: entry.amountByMonth[billMonthValue] ?? bill.amount,
-          };
-        });
-
-      setBills((current) =>
-        current.map((bill) => {
-          const syncedBill = nextBillsGroup.find((item) => item.id === bill.id);
-          return syncedBill ?? bill;
-        }),
-      );
-      setTransactions((current) => rebuildTransactionsForBills(current, nextBillsGroup));
-      return;
-    }
-
-    if (isCompleted && matchingBill) {
-      setBills((current) =>
-        current.map((bill) =>
-          bill.id === matchingBill.id ? { ...bill, status: "pending" } : bill,
-        ),
-      );
-    }
-
-    if (!isCompleted && matchingBill && matchingBill.status !== "paid") {
-      setBills((current) =>
-        current.map((bill) =>
-          bill.id === matchingBill.id ? { ...bill, amount, status: "paid" } : bill,
-        ),
-      );
-    }
-
-    setTransactions((current) => {
-      const matchingIndex = current.findIndex((transaction) => {
-        if (transaction.description === marker) {
-          return true;
-        }
-
-        return (
-          transaction.type === entry.kind &&
-          transaction.categoryId === entry.categoryId &&
-          transaction.date.slice(0, 7) === monthValue &&
-          transaction.paymentMethod === entry.paymentMethod &&
-          (transaction.accountId ?? settings.defaultAccountId) ===
-            (entry.accountId ?? settings.defaultAccountId) &&
-          (entry.cardId ? transaction.cardId === entry.cardId : true) &&
-          (entry.cardMode ? transaction.cardMode === entry.cardMode : true)
-        );
-      });
-
-      if (isCompleted) {
-        return current.filter(
-          (transaction) =>
-            transaction.description !== marker &&
-            (matchingBill ? transaction.sourceBillId !== matchingBill.id : true),
-        );
-      }
-
-      if (matchingBill) {
-        const billTransactions = current.filter((transaction) => transaction.sourceBillId === matchingBill.id);
-
-        if (billTransactions.length) {
-          return current.map((transaction) =>
-            transaction.sourceBillId === matchingBill.id ? { ...transaction, status: "paid" } : transaction,
-          );
-        }
-
-        return [...buildSettlementTransactionsFromBill(matchingBill), ...current].sort((left, right) =>
-          right.date.localeCompare(left.date),
-        );
-      }
-
-      if (matchingIndex >= 0) {
-        return current.map((transaction, index) => {
-          if (index !== matchingIndex) {
-            return transaction;
-          }
-
-          return {
-            ...transaction,
-            amount,
-            status: entry.kind === "income" ? "received" : "paid",
-            incomeKind: entry.kind === "income" ? "fixed_received" : transaction.incomeKind,
-            expenseKind:
-              entry.kind === "expense"
-                ? entry.linkedDebtId || entry.categoryId === "cat-debt"
-                  ? "debt_payment"
-                  : "fixed"
-                : transaction.expenseKind,
-          };
-        });
-      }
-
-      return [buildFixedFlowTransaction(entry, monthValue), ...current].sort((left, right) =>
-        right.date.localeCompare(left.date),
-      );
-    });
   }
 
   function handleMoveMonthlyGridRow(row: MonthlyGridRow, sourceMonthValue: string, targetMonthValue: string) {
@@ -6846,38 +6772,6 @@ export function FinanceApp() {
 
   function closeMonthlyGridCardModal() {
     setSelectedMonthlyGridCard(null);
-  }
-
-  function handleToggleMonthlyGridCardStatus(row: MonthlyGridRow, monthValue: string) {
-    const entry = fixedEntries.find((item) => item.id === row.sourceId);
-    if (entry) {
-      handleToggleFixedEntry(entry.id, monthValue);
-      return;
-    }
-
-    const bill = bills.find((item) => item.id === row.sourceId);
-    if (!bill) {
-      return;
-    }
-
-    const nextStatus: Bill["status"] = bill.status === "paid" ? "pending" : "paid";
-    setBills((current) =>
-      current.map((item) => (item.id === bill.id ? { ...item, status: nextStatus } : item)),
-    );
-    setTransactions((current) => {
-      if (nextStatus === "paid") {
-        const hasLinkedTransaction = current.some((transaction) => transaction.sourceBillId === bill.id);
-        return hasLinkedTransaction
-          ? current.map((transaction) =>
-              transaction.sourceBillId === bill.id ? { ...transaction, status: "paid" } : transaction,
-            )
-          : [...buildSettlementTransactionsFromBill({ ...bill, status: "paid" }), ...current].sort((left, right) =>
-              right.date.localeCompare(left.date),
-            );
-      }
-
-      return current.filter((transaction) => transaction.sourceBillId !== bill.id);
-    });
   }
 
   function handleDebtAdvance(debtId: string) {
@@ -8001,11 +7895,17 @@ export function FinanceApp() {
                         <div className="flex flex-wrap items-start gap-2">
                           <button
                             type="button"
-                            onClick={() => handleStartInlineNewEntry(section === "Ganhos" ? "Ganhos" : "Contas")}
-                            className="flex items-center gap-1.5 rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
+                            onClick={() =>
+                              openCommitmentModal(
+                                section === "Ganhos"
+                                  ? { kind: "income", schedule: "recurring", paymentMethod: "pix" }
+                                  : { kind: "expense", schedule: "once", paymentMethod: "pix" },
+                              )
+                            }
+                            aria-label="Novo compromisso"
+                            className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white transition hover:bg-slate-700"
                           >
-                            <Plus className="h-3.5 w-3.5" />
-                            Adicionar item
+                            <Plus className="h-4 w-4" />
                           </button>
                           <button
                             type="button"
@@ -8072,23 +7972,30 @@ export function FinanceApp() {
                                             type="button"
                                             onClick={() => {
                                               if (group.key === "Contas fixas") {
-                                                handleStartInlineNewEntry("Contas");
+                                                openCommitmentModal({ kind: "expense", schedule: "recurring", paymentMethod: "pix" });
                                                 return;
                                               }
 
                                               if (group.key === "Compras planejadas") {
-                                                openPurchaseModal();
+                                                openCommitmentModal({ kind: "expense", schedule: "saving_goal", paymentMethod: "pix" });
                                                 return;
                                               }
 
                                               if (group.key === "Faturas") {
-                                                openPurchaseModal(undefined, { planningMode: "card_parcelado" });
+                                                openCommitmentModal({
+                                                  kind: "expense",
+                                                  schedule: "installments",
+                                                  paymentMethod: "card",
+                                                  cardMode: "credit",
+                                                  installments: "2",
+                                                });
                                                 return;
                                               }
 
-                                              openDebtModal();
+                                              openCommitmentModal({ kind: "expense", schedule: "installments", paymentMethod: "pix", installments: "2" });
                                             }}
-                                            className="rounded-full bg-slate-900 px-2.5 py-1 text-[10px] font-semibold text-white transition hover:bg-slate-700"
+                                            aria-label={`Adicionar em ${group.key}`}
+                                            className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-900 text-white transition hover:bg-slate-700"
                                           >
                                             <Plus className="h-3 w-3" />
                                           </button>
@@ -8311,19 +8218,23 @@ export function FinanceApp() {
                                                   : "bg-slate-100 text-slate-700"
                                             } ${selectedMonthCellClass}`}
                                           >
+                                            <input
+                                              value={amount > 0 ? String(amount) : ""}
+                                              onChange={(event) =>
+                                                handleMonthlyGridAmountChange(row, monthItem.monthValue, event.target.value)
+                                              }
+                                              inputMode="decimal"
+                                              placeholder="0"
+                                              className="w-full bg-transparent text-[11px] font-semibold leading-tight outline-none placeholder:text-current/40"
+                                            />
                                             <button
                                               type="button"
                                               onClick={() =>
                                                 openCardBillComparison(row.sourceId, monthItem.monthValue)
                                               }
-                                              className="text-left"
+                                              className="mt-2 w-fit rounded-full bg-white/70 px-2 py-1 text-left text-[9px] font-semibold uppercase tracking-[0.12em] transition hover:bg-white"
                                             >
-                                              <span className="block text-[11px] font-semibold leading-tight">
-                                                {amount > 0 ? formatCurrency(amount) : "-"}
-                                              </span>
-                                              <span className="mt-2 block text-[9px] font-semibold uppercase tracking-[0.12em]">
-                                                {amount <= 0 && cardBillRealAmount <= 0 ? "Sem fatura" : "Comparar"}
-                                              </span>
+                                              {amount <= 0 && cardBillRealAmount <= 0 ? "Sem fatura" : "Comparar"}
                                             </button>
                                             {amount > 0 || cardBillRealAmount > 0 ? (
                                               <div className="mt-2 flex flex-wrap gap-1">
@@ -8505,9 +8416,16 @@ export function FinanceApp() {
                         <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
                           {isPurchaseRow ? (
                             <>
-                              <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-4 text-sm text-violet-800">
-                                Ajuste completo da compra planejada pelo modal central.
-                              </div>
+                              <FormField label="Valor previsto">
+                                <input
+                                  value={String(amount || "")}
+                                  onChange={(event) =>
+                                    handleMonthlyGridAmountChange(entry, selectedMonth, event.target.value)
+                                  }
+                                  inputMode="decimal"
+                                  className="field"
+                                />
+                              </FormField>
                               <button
                                 type="button"
                                 onClick={() => openMonthlyGridRowModal(entry)}
@@ -8518,15 +8436,22 @@ export function FinanceApp() {
                             </>
                           ) : isCardAutoBillRow ? (
                             <>
-                              <div className="rounded-2xl border border-sky-100 bg-sky-50 px-4 py-4 text-sm text-sky-800">
-                                Fatura automatica vinculada ao cartao. O valor acompanha os lancamentos de credito e pode ser revisado no detalhe do cartao.
-                              </div>
+                              <FormField label="Estimativa da fatura">
+                                <input
+                                  value={String(amount || "")}
+                                  onChange={(event) =>
+                                    handleMonthlyGridAmountChange(entry, selectedMonth, event.target.value)
+                                  }
+                                  inputMode="decimal"
+                                  className="field"
+                                />
+                              </FormField>
                               <button
                                 type="button"
-                                onClick={() => openCardDetails(entry.sourceId, selectedMonth)}
+                                onClick={() => openCardBillComparison(entry.sourceId, selectedMonth)}
                                 className="rounded-2xl bg-sky-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-sky-700"
                               >
-                                Abrir cartao
+                                Comparar
                               </button>
                             </>
                           ) : (
@@ -8589,6 +8514,7 @@ export function FinanceApp() {
 
           {renderMonthlyGridCardModal()}
           {renderCardBillComparisonModal()}
+          {renderCommitmentModal()}
           {renderFixedEntryModal()}
           {renderPurchaseModal()}
           </div>
@@ -9549,14 +9475,9 @@ export function FinanceApp() {
             >
               {isPaid ? "Pago" : "Pendente"}
             </span>
-            <button
-              type="button"
-              onClick={() => handleToggleCardBillPaid(cardId, monthValue)}
-              disabled={!isPaid && realAmount <= 0}
-              className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              {isPaid ? "Desfazer pagamento" : "Marcar como pago"}
-            </button>
+            <p className="max-w-sm text-right text-xs font-medium text-slate-500">
+              O pagamento da fatura e confirmado pela importacao do extrato bancario vinculado.
+            </p>
           </div>
         </div>
       </div>
@@ -9709,33 +9630,11 @@ export function FinanceApp() {
             ) : null}
           </div>
 
-          <div className="flex flex-wrap justify-end gap-3 border-t border-slate-100 px-6 py-5">
-            {row.sourceType === "fixed" ? (
-              <button
-                type="button"
-                disabled={amount <= 0}
-                onClick={() => handleToggleMonthlyGridCardStatus(row, monthValue)}
-                className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${
-                  amount <= 0
-                    ? "cursor-not-allowed bg-slate-100 text-slate-400"
-                    : isCompleted
-                      ? "bg-slate-900 text-white hover:bg-slate-700"
-                      : entryKind === "income"
-                        ? "bg-emerald-500 text-white hover:bg-emerald-600"
-                        : "bg-rose-500 text-white hover:bg-rose-600"
-                }`}
-              >
-                {amount <= 0
-                  ? "Sem valor"
-                  : isCompleted
-                    ? entryKind === "income"
-                      ? "Desmarcar entrada"
-                      : "Desmarcar pagamento"
-                    : entryKind === "income"
-                      ? "Marcar que entrou"
-                      : "Marcar como pago"}
-              </button>
-            ) : null}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-6 py-5">
+            <p className="max-w-md text-xs font-medium text-slate-500">
+              A planilha edita previsao e valor. A confirmacao de pagamento vem pela importacao e reconciliacao do extrato.
+            </p>
+            <div className="flex flex-wrap justify-end gap-3">
             {linkedDebtId ? (
               <button
                 type="button"
@@ -9759,6 +9658,7 @@ export function FinanceApp() {
             >
               Abrir edicao completa
             </button>
+            </div>
           </div>
         </div>
       </div>
@@ -10002,6 +9902,234 @@ export function FinanceApp() {
                 className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
               >
                 Salvar valor fixo
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  function renderCommitmentModal() {
+    if (!isCommitmentModalOpen) {
+      return null;
+    }
+
+    const categoryOptions = getSelectableCategories(draftCommitment.kind, {
+      includeHidden: draftCommitment.kind === "expense",
+    }).map((category) => ({ value: category.id, label: getCategoryOptionLabel(category), icon: Tag }));
+    const isInstallment = draftCommitment.schedule === "installments";
+    const usesCard = draftCommitment.paymentMethod === "card";
+    const isSavingGoal = draftCommitment.schedule === "saving_goal";
+    const installments = Math.max(1, Number(draftCommitment.installments.replace(",", ".")) || 1);
+    const totalAmount = Number(draftCommitment.totalAmount.replace(",", ".")) || 0;
+    const suggestedInstallment = installments > 0 ? Number((totalAmount / installments).toFixed(2)) : totalAmount;
+    const automaticDestination =
+      draftCommitment.kind === "income"
+        ? "Ganhos"
+        : isSavingGoal
+          ? "Compras planejadas"
+          : isInstallment && usesCard && draftCommitment.cardMode === "credit"
+            ? "Faturas"
+            : isInstallment
+              ? "Dividas e acordos"
+              : draftCommitment.schedule === "recurring"
+                ? "Contas fixas"
+                : "Contas";
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+        <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
+          <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] text-sky-600">Novo compromisso</p>
+              <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                Cadastro inteligente
+              </h3>
+            </div>
+            <button
+              type="button"
+              onClick={closeCommitmentModal}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-600 transition hover:bg-slate-200"
+              aria-label="Fechar modal"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <form onSubmit={handleSaveCommitment} className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <FormField label="Nome">
+                  <input
+                    value={draftCommitment.title}
+                    onChange={(event) => setDraftCommitment((current) => ({ ...current, title: event.target.value }))}
+                    className="field"
+                    autoFocus
+                  />
+                </FormField>
+                <FormField label="Tipo">
+                  <CustomSelect
+                    value={draftCommitment.kind}
+                    onChange={(value) => {
+                      const nextKind = value as DraftCommitment["kind"];
+                      const nextCategory =
+                        categories.find((category) => category.type === nextKind && !isHiddenUiCategoryId(category.id)) ??
+                        categories.find((category) => category.type === nextKind);
+                      setDraftCommitment((current) => ({
+                        ...current,
+                        kind: nextKind,
+                        schedule: nextKind === "income" && current.schedule === "saving_goal" ? "recurring" : current.schedule,
+                        categoryId: nextCategory?.id ?? current.categoryId,
+                        paymentMethod: nextKind === "income" && current.paymentMethod === "card" ? "pix" : current.paymentMethod,
+                      }));
+                    }}
+                    options={[
+                      { value: "expense", label: "Pagar" },
+                      { value: "income", label: "Receber" },
+                    ]}
+                  />
+                </FormField>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <FormField label="Como acontece">
+                  <CustomSelect
+                    value={draftCommitment.schedule}
+                    onChange={(value) =>
+                      setDraftCommitment((current) => ({
+                        ...current,
+                        schedule: value as CommitmentSchedule,
+                        kind: value === "saving_goal" ? "expense" : current.kind,
+                        installments: value === "installments" ? current.installments : "1",
+                      }))
+                    }
+                    options={[
+                      { value: "once", label: "Uma vez" },
+                      { value: "recurring", label: "Todo mes" },
+                      { value: "installments", label: "Parcelado" },
+                      { value: "saving_goal", label: "Guardar para comprar" },
+                    ].filter((option) => draftCommitment.kind === "expense" || option.value !== "saving_goal")}
+                  />
+                </FormField>
+                <FormField label="Categoria">
+                  <CustomSelect
+                    value={draftCommitment.categoryId}
+                    onChange={(value) => setDraftCommitment((current) => ({ ...current, categoryId: value }))}
+                    options={categoryOptions.length ? categoryOptions : [{ value: draftCommitment.categoryId, label: "Sem categoria", icon: Tag }]}
+                  />
+                </FormField>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <FormField label="Valor total">
+                  <input
+                    value={draftCommitment.totalAmount}
+                    onChange={(event) => setDraftCommitment((current) => ({ ...current, totalAmount: event.target.value }))}
+                    inputMode="decimal"
+                    className="field"
+                  />
+                </FormField>
+                <FormField label={isInstallment ? "Primeira parcela" : "Data"}>
+                  <input
+                    type="date"
+                    value={draftCommitment.startDate}
+                    onChange={(event) => setDraftCommitment((current) => ({ ...current, startDate: event.target.value }))}
+                    className="field"
+                  />
+                </FormField>
+                <FormField label="Forma de pagamento">
+                  <CustomSelect
+                    value={draftCommitment.paymentMethod}
+                    onChange={(value) =>
+                      setDraftCommitment((current) => ({
+                        ...current,
+                        paymentMethod: value as PaymentPlanMethod,
+                        cardMode: value === "card" ? current.cardMode : "credit",
+                      }))
+                    }
+                    options={[
+                      { value: "pix", label: "Pix" },
+                      { value: "bank_transfer", label: "Transferencia" },
+                      { value: "cash", label: "Dinheiro" },
+                      ...(draftCommitment.kind === "expense" ? [{ value: "card", label: "Cartao", icon: CreditCard }] : []),
+                    ]}
+                  />
+                </FormField>
+              </div>
+
+              {isInstallment ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <FormField label="Quantidade de parcelas">
+                    <input
+                      value={draftCommitment.installments}
+                      onChange={(event) => setDraftCommitment((current) => ({ ...current, installments: event.target.value }))}
+                      inputMode="numeric"
+                      className="field"
+                    />
+                  </FormField>
+                  <FormField label="Valor por parcela">
+                    <input
+                      value={draftCommitment.installmentAmount || (suggestedInstallment > 0 ? String(suggestedInstallment) : "")}
+                      onChange={(event) =>
+                        setDraftCommitment((current) => ({ ...current, installmentAmount: event.target.value }))
+                      }
+                      inputMode="decimal"
+                      className="field"
+                    />
+                  </FormField>
+                </div>
+              ) : null}
+
+              {usesCard ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <FormField label="Cartao">
+                    <CustomSelect
+                      value={draftCommitment.cardId}
+                      onChange={(value) => setDraftCommitment((current) => ({ ...current, cardId: value }))}
+                      options={cards.map((card) => ({ value: card.id, label: card.name, icon: CreditCard }))}
+                    />
+                  </FormField>
+                  <FormField label="Modalidade">
+                    <CustomSelect
+                      value={draftCommitment.cardMode}
+                      onChange={(value) => setDraftCommitment((current) => ({ ...current, cardMode: value as CardMode }))}
+                      options={[
+                        { value: "credit", label: "Credito" },
+                        { value: "debit", label: "Debito" },
+                      ]}
+                    />
+                  </FormField>
+                </div>
+              ) : null}
+
+              <FormField label="Observacoes">
+                <textarea
+                  value={draftCommitment.notes}
+                  onChange={(event) => setDraftCommitment((current) => ({ ...current, notes: event.target.value }))}
+                  rows={3}
+                  className="field min-h-20"
+                />
+              </FormField>
+
+              <div className="rounded-[24px] border border-sky-100 bg-sky-50 px-4 py-4 text-sm text-sky-800">
+                Vai aparecer automaticamente em <span className="font-semibold">{automaticDestination}</span>.
+              </div>
+            </div>
+
+            <div className="flex shrink-0 justify-end gap-3 border-t border-slate-100 px-6 py-5">
+              <button
+                type="button"
+                onClick={closeCommitmentModal}
+                className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
+              >
+                Salvar
               </button>
             </div>
           </form>
@@ -11907,7 +12035,7 @@ export function FinanceApp() {
             {selectedCardLimitSnapshot.committed > selectedCardDetail.creditLimit + 0.009 ? (
               <div className="mt-4 flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
                 <AlertCircle className="h-4 w-4 shrink-0" />
-                Limite excedido nas proximas 12 faturas: {formatCurrency(selectedCardLimitSnapshot.committed)} de{" "}
+                Limite excedido em faturas abertas: {formatCurrency(selectedCardLimitSnapshot.committed)} de{" "}
                 {formatCurrency(selectedCardDetail.creditLimit)}.
               </div>
             ) : null}
@@ -12112,7 +12240,7 @@ export function FinanceApp() {
                   <SimulationRow
                     label="Limite restante"
                     value={formatCurrency(selectedCardAvailableLimit)}
-                    support="Considerando as proximas 12 faturas"
+                    support="Considerando faturas abertas ainda nao pagas"
                   />
                 </div>
               </Panel>
@@ -12376,7 +12504,7 @@ export function FinanceApp() {
       { id: "overview" as const, label: "Visao geral" },
       { id: "normal" as const, label: "Contas" },
       { id: "recurring" as const, label: "Contas recorrentes" },
-      { id: "debts" as const, label: "Dividas" },
+      { id: "debts" as const, label: "Dividas e acordos" },
     ];
 
     const accountsToolbar = (
@@ -12402,17 +12530,11 @@ export function FinanceApp() {
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          onClick={() => openNewAccountModal("bill")}
-          className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
+          onClick={() => openCommitmentModal({ kind: "expense", schedule: "once", paymentMethod: "pix" })}
+          aria-label="Novo compromisso"
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white transition hover:bg-slate-700"
         >
-          Nova conta
-        </button>
-        <button
-          type="button"
-          onClick={() => openNewAccountModal("debt")}
-          className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-        >
-          Nova divida
+          <Plus className="h-4 w-4" />
         </button>
       </div>
     );
@@ -12434,7 +12556,7 @@ export function FinanceApp() {
               <p className="mt-2 text-2xl font-semibold text-slate-900">{formatCurrency(normalBillsAmount)}</p>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-              <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Dividas em aberto</p>
+              <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Dividas e acordos em aberto</p>
               <p className="mt-2 text-2xl font-semibold text-slate-900">{formatCurrency(activeDebtsAmount)}</p>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
@@ -12507,7 +12629,7 @@ export function FinanceApp() {
               </button>
             </Panel>
 
-            <Panel title="Dividas e abatimentos" description="">
+            <Panel title="Dividas e acordos" description="">
               <div className="space-y-3">
                 {debts.slice(0, 3).map((debt) => (
                   <div key={debt.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
@@ -12612,7 +12734,7 @@ export function FinanceApp() {
                 })
               ) : (
                 <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                  Nenhuma conta normal cadastrada. Use Nova conta para registrar pagamentos avulsos, a vista ou parcelados.
+                  Nenhuma conta normal cadastrada. Use + para registrar um compromisso.
                 </div>
               )}
             </div>
@@ -12728,7 +12850,7 @@ export function FinanceApp() {
           </Panel>
         ) : (
           <Panel
-            title="Dividas e abatimentos"
+            title="Dividas e acordos"
             description=""
           >
             <div className="space-y-3">
@@ -12822,6 +12944,7 @@ export function FinanceApp() {
         )}
 
         {renderNewAccountModal()}
+        {renderCommitmentModal()}
         {renderBillModal()}
         {renderDebtModal()}
         {renderDebtPlanModal()}
