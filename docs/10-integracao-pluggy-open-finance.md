@@ -1,6 +1,6 @@
 # Integração Pluggy — Open Finance no Monex
 
-> Data: 03/08/2026
+> Data: 05/08/2026
 > Status: Planejamento
 > Prioridade: Alta
 
@@ -20,6 +20,7 @@
 | 8 | Estrutura de dados |
 | 9 | Fases de implementação |
 | 10 | Checklist de validação |
+| 11 | Como adicionar novos bancos (extensibilidade) |
 
 ---
 
@@ -208,7 +209,7 @@ São limites **por combinação** de CPF + banco + produto:
 ┌─────────────────────────────────────────────────────────┐
 │              OPEN FINANCE (BACEN)                       │
 ├─────────────────────────────────────────────────────────┤
-│  Nubank · Inter · Itaú · Bradesco · BB · XP · etc     │
+│  Nubank · Inter · Mercado Pago · C6 · Shopee · etc    │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -332,9 +333,9 @@ Domingo à meia-noite (ou primeiro acesso da semana)
 
 **Custo estimado:**
 ```
-6 bancos × 3 requests = 18 requests/semana
-18 × 4 semanas = 72 requests/mês
-Budget auto: 300 → usando 24% ✅
+5 bancos × 3 requests = 15 requests/semana
+15 × 4 semanas = 60 requests/mês
+Budget auto: 300 → usando 20% ✅
 ```
 
 ### 6.2 Sync manual (sob demanda)
@@ -362,8 +363,8 @@ Usuário clica "Atualizar dados"
 
 **Custo estimado:**
 ```
-2 syncs manuais/mês × 6 bancos × 2 requests = 24 requests
-Budget manual: 120 → usando 20% ✅
+2 syncs manuais/mês × 5 bancos × 2 requests = 20 requests
+Budget manual: 120 → usando 17% ✅
 ```
 
 ### 6.3 Sync sob demanda (transações antigas)
@@ -387,62 +388,88 @@ Usuário precisa ver transação de 2 meses atrás
 
 ## 7. Mapeamento de bancos
 
-### Bancos do Caio (exemplo)
+### Bancos conectados (fase atual)
 
-| # | Banco | Tipo | O que puxar | Produtos |
-|---|-------|------|-------------|----------|
-| 1 | Nubank | Débito + Crédito | Conta + Cartão | balance, transactions, creditCard |
-| 2 | Inter | Débito + Pix + Investimentos | Conta + Investimentos | balance, transactions, investments |
-| 3 | Bradesco | Débito | Conta | balance, transactions |
-| 4 | Itaú | Crédito | Cartão | creditCard |
-| 5 | XP | Investimentos | Investimentos | investments |
-| 6 | BB | Débito + Crédito + Poupança | Conta + Cartão + Poupança | balance, transactions, creditCard |
+| # | Banco | Conector Pluggy | Tipo | Sync | Produtos |
+|---|-------|-----------------|------|------|----------|
+| 1 | Nubank | `[OF] Nubank` (id ~610) | Débito + Crédito | Semanal | ACCOUNTS, TRANSACTIONS, CREDIT_CARDS |
+| 2 | Inter | `[OF] Inter` (id ~602) | Débito + Crédito | Semanal | ACCOUNTS, TRANSACTIONS, CREDIT_CARDS, INVESTMENTS |
+| 3 | Mercado Pago | `[OF] Mercado Pago` (id ~606) | Débito + Pix | Mensal | ACCOUNTS, TRANSACTIONS |
+| 4 | C6 Bank | `[OF] C6 Bank` (id ~630) | Débito + Pix | Mensal | ACCOUNTS, TRANSACTIONS |
+| 5 | Shopee | `[OF] Shopee` (id ~640) | Parcelamento interno | Mensal | ACCOUNTS, TRANSACTIONS |
+
+> **Nota sobre Shopee:** conector adicionado no changelog de julho/2025. Pode ter cobertura limitada. Testar antes de confiar.
+
+### Bancos NÃO suportados
+
+| Banco/Marca | Motivo |
+|-------------|--------|
+| VR Benefícios | Empresa de voucher/benefício — não é instituição financeira regulada. Classificação "Payment Processor" no Pluggy. Open Finance não suporta esse tipo. |
+| Alelo | Mesmo motivo que VR. Empresa de vale-alimentação/refeição. |
+| Pluxee (antiga Sodexo) | Mesmo motivo. Empresa de voucher. |
+| Ticket (Edenred) | Mesmo motivo. Empresa de voucher. |
+| Aliexpress | Marketplace chinês — não tem presença financeira no Brasil nem instituição regulada pelo BACEN. |
+
+> **Alternativa para VR/Alelo:** se no futuro o Pluggy lançar conectores diretos para essas empresas de benefício, basta adicionar na lista abaixo. A arquitetura já suporta.
 
 ### Configuração por banco
 
 ```typescript
-const bankConfigs = [
+type BankConfig = {
+  id: string;                    // ID interno do Monex
+  connectorId: number;           // ID do conector no Pluggy
+  name: string;                  // Nome exibido ao usuário
+  nickname?: string;             // Apelido (ex: "Nubank")
+  syncFrequency: "weekly" | "monthly";
+  products: string[];            // Produtos que o conector expõe
+  user?: "personal" | "business";
+};
+
+const BANK_CONFIGS: BankConfig[] = [
   {
     id: "nubank",
+    connectorId: 610,            // ID do conector Open Finance da Nubank
     name: "Nubank",
-    itemId: "item_xxx",  // ID da conexão na Pluggy
-    products: ["balance", "transactions", "creditCard"],
-    hasInvestments: false,
+    nickname: "Nubank",
+    syncFrequency: "weekly",
+    products: ["ACCOUNTS", "TRANSACTIONS", "CREDIT_CARDS"],
+    user: "personal",
   },
   {
     id: "inter",
+    connectorId: 602,
     name: "Inter",
-    itemId: "item_yyy",
-    products: ["balance", "transactions", "investments"],
-    hasInvestments: true,
+    nickname: "Inter",
+    syncFrequency: "weekly",
+    products: ["ACCOUNTS", "TRANSACTIONS", "CREDIT_CARDS", "INVESTMENTS"],
+    user: "personal",
   },
   {
-    id: "bradesco",
-    name: "Bradesco",
-    itemId: "item_zzz",
-    products: ["balance", "transactions"],
-    hasInvestments: false,
+    id: "mercadopago",
+    connectorId: 606,
+    name: "Mercado Pago",
+    nickname: "Mercado Pago",
+    syncFrequency: "monthly",
+    products: ["ACCOUNTS", "TRANSACTIONS"],
+    user: "personal",
   },
   {
-    id: "itau",
-    name: "Itaú",
-    itemId: "item_aaa",
-    products: ["creditCard"],
-    hasInvestments: false,
+    id: "c6",
+    connectorId: 630,
+    name: "C6 Bank",
+    nickname: "C6",
+    syncFrequency: "monthly",
+    products: ["ACCOUNTS", "TRANSACTIONS"],
+    user: "personal",
   },
   {
-    id: "xp",
-    name: "XP",
-    itemId: "item_bbb",
-    products: ["investments"],
-    hasInvestments: true,
-  },
-  {
-    id: "bb",
-    name: "Banco do Brasil",
-    itemId: "item_ccc",
-    products: ["balance", "transactions", "creditCard"],
-    hasInvestments: false,
+    id: "shopee",
+    connectorId: 640,
+    name: "Shopee",
+    nickname: "Shopee",
+    syncFrequency: "monthly",
+    products: ["ACCOUNTS", "TRANSACTIONS"],
+    user: "personal",
   },
 ];
 ```
@@ -450,17 +477,19 @@ const bankConfigs = [
 ### Requests por sync completo
 
 ```
-Banco         Saldo  Transações  Investimentos  Total
-─────────────────────────────────────────────────────
-Nubank         1        1            0           2
-Inter          1        1            1           3
-Bradesco       1        1            0           2
-Itaú           0        0            0           0 (só cartão)
-XP             0        0            1           1
-BB             1        1            0           2
-─────────────────────────────────────────────────────
-Total por sync:                          10 requests
-Total mês (4 syncs):                     40 requests
+Banco           Saldo  Transações  Cartão  Invest.  Total
+──────────────────────────────────────────────────────────
+Nubank            1        1         1       0        3
+Inter             1        1         1       1        4
+Mercado Pago      1        1         0       0        2
+C6 Bank           1        1         0       0        2
+Shopee            1        1         0       0        2
+──────────────────────────────────────────────────────────
+Total por sync:                               13 requests
+Total mês - auto (4 syncs):                   52 requests
+Total mês - manual (estimado):                ~20 requests
+Total mês:                                   ~72 requests
+Budget disponível:                           420 requests ✅
 ```
 
 ---
@@ -678,7 +707,7 @@ CREATE TABLE pluggy_sync_log (
 
 ### Configuração
 - [ ] Conta criada em meu.pluggy.ai
-- [ ] 6 bancos conectados
+- [ ] 5 bancos conectados (Nubank, Inter, Mercado Pago, C6, Shopee)
 - [ ] Aplicação criada em dashboard.pluggy.ai
 - [ ] CLIENT_ID e CLIENT_SECRET configurados
 - [ ] SDK instalado e funcionando
@@ -714,6 +743,119 @@ CREATE TABLE pluggy_sync_log (
 - [ ] Cartões Pluggy viram cards Monex
 - [ ] Investimentos Pluggy viram investments Monex
 - [ ] Categorização é sugerida corretamente
+
+---
+
+## 11. Como adicionar novos bancos (extensibilidade)
+
+A arquitetura do Monex com Pluggy é **genérica por design** — o sync engine não depende de qual banco é. Adicionar um banco novo é basicamente **configuração, não código**.
+
+### Passo a passo
+
+#### 1. Descobrir se o banco existe no Pluggy
+
+```typescript
+// Consultar a API
+const connectors = await pluggy.fetchConnectors({ isOpenFinance: true });
+
+// Filtrar pelo nome
+const banco = connectors.results.find(c =>
+  c.name.toLowerCase().includes("nome do banco")
+);
+
+if (banco) {
+  console.log(`ID: ${banco.id}`);
+  console.log(`Produtos: ${banco.products}`);
+  console.log(`Contexto: ${banco.personal ? "Personal" : "Business"}`);
+}
+```
+
+Ou consultar a tabela de cobertura: [docs.pluggy.ai/docs/open-finance-institutions-coverage](https://docs.pluggy.ai/docs/open-finance-institutions-coverage)
+
+#### 2. Verificar quais produtos o conector expõe
+
+Nem todo banco tem tudo. Verificar antes:
+
+| Produto | O que significa |
+|---------|----------------|
+| `ACCOUNTS` | Contas bancárias (corrente, poupança) |
+| `TRANSACTIONS` | Extratos/transações |
+| `CREDIT_CARDS` | Cartões de crédito |
+| `INVESTMENTS` | Investimentos |
+| `LOANS` | Empréstimos/financiamentos |
+
+Se o banco não tem `CREDIT_CARDS`, não adicione esse produto na config.
+
+#### 3. Adicionar o objeto na lista `BANK_CONFIGS`
+
+```typescript
+{
+  id: "nome-banco",              // ID kebab-case sem acentos
+  connectorId: 6XX,              // ID do conector (descoberto no passo 1)
+  name: "Nome do Banco",         // Nome completo
+  nickname: "Apelido",           // Nome curto pro usuário
+  syncFrequency: "monthly",      // "weekly" ou "monthly"
+  products: ["ACCOUNTS", "TRANSACTIONS"],  // O que o conector expõe
+  user: "personal",              // "personal" ou "business"
+}
+```
+
+#### 4. Atualizar o orçamento (se necessário)
+
+Se o novo banco many requests, recalcular:
+
+```
+Budget auto = 300 requests/mês
+Budget manual = 120 requests/mês
+
+Novo banco consome ~4 requests/sync
+4 syncs/mês × 4 = 16 requests/mês a mais
+
+Ainda cabe no budget? → Adiciona
+Não cabe? → Aumenta o budget ou reduz a frequência
+```
+
+#### 5. Testar
+
+1. Conectar o banco no Meu Pluggy
+2. Rodar sync manual no Monex
+3. Verificar se dados aparecem corretamente
+4. Verificar se budget não estourou
+
+### Exemplo: adicionando BTG Pactual
+
+```typescript
+// 1. Consultar API
+const btg = connectors.find(c => c.name.includes("BTG"));
+// → { id: 604, name: "BTGPactual", products: ["ACCOUNTS", "TRANSACTIONS", "INVESTMENTS"] }
+
+// 2. Adicionar na config
+{
+  id: "btg",
+  connectorId: 604,
+  name: "BTGPactual",
+  nickname: "BTG",
+  syncFrequency: "weekly",
+  products: ["ACCOUNTS", "TRANSACTIONS", "INVESTMENTS"],
+  user: "personal",
+}
+
+// 3. Pronto — o sync engine já puxa os dados automaticamente
+```
+
+### O que NÃO precisa mudar ao adicionar banco
+
+- ❌ Sync engine (genérica)
+- ❌ Cache local (SQLite genérico)
+- ❌ Budget system (independente por banco)
+- ❌ UI de configuração (lista dinâmica)
+- ❌ Importação de transações (genérica)
+
+### O que pode precisar mudar
+
+- ⚠️ Mapeamento de categorias (se o banco usa categorias diferentes)
+- ⚠️ Formato de investimentos (cada banco expõe de um jeito)
+- ⚠️ Lógica de deduplicação ( IDs diferentes por banco)
 
 ---
 
