@@ -7177,7 +7177,34 @@ export function FinanceApp() {
         sourceId: bill.recurringGroupId ?? bill.id,
       }));
 
-    return [...transactionItems, ...billItems].sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+    const plannedPurchaseItems = plannedPurchases
+      .filter(
+        (purchase) =>
+          purchase.planningMode === "card_parcelado" &&
+          purchase.plannedCardId === cardId &&
+          purchase.status !== "cancelled" &&
+          purchase.status !== "bought" &&
+          purchase.estimatedValue > 0,
+      )
+      .map((purchase, index) => {
+        const purchaseAmountByMonth = getPlannedPurchaseAmountByMonth(purchase);
+        const monthAmount = purchaseAmountByMonth[statementMonth] ?? 0;
+        const totalMonths = Object.values(purchaseAmountByMonth).filter((v) => v > 0).length;
+        return {
+          id: `purchase-${purchase.id}`,
+          title: purchase.name,
+          amount: monthAmount,
+          support: purchase.plannedInstallments
+            ? `Compra planejada - Parcelado ${purchase.plannedInstallments}x`
+            : "Compra planejada",
+          sortKey: `${purchase.desiredDate ?? "9999"}-${String(index).padStart(4, "0")}`,
+          sourceType: "bill" as const,
+          sourceId: purchase.id,
+        };
+      })
+      .filter((item) => item.amount > 0);
+
+    return [...transactionItems, ...billItems, ...plannedPurchaseItems].sort((left, right) => left.sortKey.localeCompare(right.sortKey));
   }
 
   function handleCardStatementGridItemAmountChange(
