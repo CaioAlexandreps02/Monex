@@ -5483,23 +5483,7 @@ export function FinanceApp() {
     if (row.sourceType === "planned_purchase") {
       const purchase = plannedPurchases.find((item) => item.id === row.sourceId);
       if (purchase) {
-        setEditingCommitmentTarget({ sourceType: "planned_purchase", sourceId: purchase.id, monthValue });
-        setDraftCommitment({
-          ...baseDraft,
-          title: purchase.name,
-          kind: "expense",
-          schedule: purchase.planningMode === "card_parcelado" ? "installments" : "saving_goal",
-          categoryId: row.categoryId,
-          totalAmount: String(purchase.estimatedValue),
-          installmentAmount: String(purchase.suggestedPeriodAmount || amount || purchase.estimatedValue),
-          installments: String(purchase.plannedInstallments ?? 1),
-          startDate: purchase.desiredDate ?? `${monthValue}-28`,
-          paymentMethod: purchase.plannedPaymentMethod ?? "pix",
-          cardId: purchase.plannedCardId ?? settings.defaultCardId,
-          cardMode: purchase.plannedCardMode ?? "credit",
-          notes: purchase.notes ?? purchase.description ?? "",
-        });
-        setIsCommitmentModalOpen(true);
+        openPurchaseModal(purchase);
         return;
       }
     }
@@ -7440,8 +7424,8 @@ export function FinanceApp() {
           purchase.status !== "cancelled" &&
           purchase.status !== "bought" &&
           !realizedPlannedPurchaseIds.has(purchase.id) &&
-          // Exclui compras cart_parcelado com cartão vinculado — elas já aparecem na fatura do cartão
-          !(purchase.planningMode === "card_parcelado" && purchase.plannedCardId),
+          // Exclui compras card_parcelado COM cartão e valor — elas já aparecem na fatura do cartão
+          !(purchase.planningMode === "card_parcelado" && purchase.plannedCardId && purchase.estimatedValue > 0),
       )
       .map((purchase) => {
         const category = getPlannedPurchaseCategory(purchase);
@@ -10097,14 +10081,16 @@ export function FinanceApp() {
                           <button
                             type="button"
                             onClick={() =>
-                              openCommitmentModal(
-                                section === "Ganhos"
-                                  ? { kind: "income", schedule: "recurring", paymentMethod: "pix" }
-                                  : { kind: "expense", schedule: "once", paymentMethod: "pix" },
-                              )
+                              section === "Planejamento"
+                                ? openPurchaseModal()
+                                : openCommitmentModal(
+                                    section === "Ganhos"
+                                      ? { kind: "income", schedule: "recurring", paymentMethod: "pix" }
+                                      : { kind: "expense", schedule: "once", paymentMethod: "pix" },
+                                  )
                             }
                             aria-label={`Adicionar em ${fixedSectionDisplayLabels[section]}`}
-                            title={`Adicionar ${section === "Ganhos" ? "ganho" : "gasto"}`}
+                            title={`Adicionar ${section === "Ganhos" ? "ganho" : section === "Planejamento" ? "compra planejada" : "gasto"}`}
                             className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white transition hover:bg-slate-700"
                           >
                             <Plus className="h-4 w-4" />
@@ -12638,13 +12624,15 @@ export function FinanceApp() {
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-xs uppercase tracking-[0.24em] text-sky-600">
-                {editingPurchaseId ? "Editar planejamento" : "Novo planejamento"}
+                {editingPurchaseId ? "Transformar em compra real" : "Novo planejamento"}
               </p>
               <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                {editingPurchaseId ? "Ajustar item do planejamento" : "Adicionar item ao planejamento"}
+                {editingPurchaseId ? "Completar dados da compra" : "Adicionar item ao planejamento"}
               </h3>
               <p className="mt-2 text-sm text-slate-500">
-                Aqui voce configura a compra futura. Os valores mes a mes podem ser ajustados direto na planilha.
+                {editingPurchaseId
+                  ? "Preencha os dados faltantes para mover esta compra para a secao correta."
+                  : "Aqui voce configura a compra futura. Salve so com o nome e complete depois."}
               </p>
             </div>
             <button
