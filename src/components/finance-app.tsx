@@ -10271,7 +10271,9 @@ export function FinanceApp() {
                                           setDraggedGridCell(null);
                                         }}
                                       >
-                                        {isPurchaseRow ? (
+                                        {isPurchaseRow ? (() => {
+                                          const isRealPurchase = amount > 0 && row.paymentMethod && row.paymentMethod !== "credit_card";
+                                          return (
                                           <div
                                             draggable={amount > 0}
                                             onDragStart={() =>
@@ -10284,9 +10286,13 @@ export function FinanceApp() {
                                             className={`flex h-full min-h-[72px] w-full flex-col justify-between rounded-[18px] px-2 py-2 text-left transition ${
                                               amount <= 0
                                                 ? "bg-slate-50 text-slate-300 hover:bg-slate-100"
-                                                : isCompleted
-                                                  ? "cursor-grab bg-violet-100 text-violet-800 hover:bg-violet-200 active:cursor-grabbing"
-                                                  : "cursor-grab bg-violet-50 text-violet-700 hover:bg-violet-100 active:cursor-grabbing"
+                                                : isRealPurchase
+                                                  ? isCompleted
+                                                    ? "cursor-grab bg-emerald-100 text-emerald-800 hover:bg-emerald-200 active:cursor-grabbing"
+                                                    : "cursor-grab bg-emerald-50 text-emerald-700 hover:bg-emerald-100 active:cursor-grabbing"
+                                                  : isCompleted
+                                                    ? "cursor-grab bg-violet-100 text-violet-800 hover:bg-violet-200 active:cursor-grabbing"
+                                                    : "cursor-grab bg-violet-50 text-violet-700 hover:bg-violet-100 active:cursor-grabbing"
                                             } ${selectedMonthCellClass}`}
                                           >
                                             <input
@@ -10305,10 +10311,11 @@ export function FinanceApp() {
                                               className="w-full bg-transparent text-[11px] font-semibold leading-tight outline-none placeholder:text-current/40"
                                             />
                                             <span className="text-[9px] font-semibold uppercase tracking-[0.12em]">
-                                              {amount <= 0 ? "Sem valor" : "Abrir"}
+                                              {amount <= 0 ? "Sem valor" : isRealPurchase ? (row.paymentMethod === "pix" ? "Pix" : row.paymentMethod === "debit_card" ? "Debito" : "Abrir") : "Abrir"}
                                             </span>
                                           </div>
-                                        ) : isCardAutoBillRow ? (
+                                          );
+                                        })() : isCardAutoBillRow ? (
                                           <div
                                             onClick={() =>
                                               openCardBillComparison(row.sourceId, monthItem.monthValue)
