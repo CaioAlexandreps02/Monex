@@ -14520,6 +14520,25 @@ export function FinanceApp() {
             <Panel
               title={`Lancamentos de ${formatMonthLabel(monthValueToDate(selectedCardStatementMonth))}`}
               description="Tudo o que entrou nessa fatura do cartao selecionado."
+              action={
+                selectedTransactionIds.length >= 2 ? (
+                  <button
+                    type="button"
+                    onClick={openGroupModal}
+                    className="rounded-full bg-violet-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-violet-700"
+                  >
+                    Agrupar ({selectedTransactionIds.length})
+                  </button>
+                ) : selectedTransactionIds.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={clearTransactionSelection}
+                    className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                  >
+                    Limpar ({selectedTransactionIds.length})
+                  </button>
+                ) : null
+              }
             >
               <div className="space-y-3">
                 {selectedCardStatementTransactions.length ? (
@@ -14590,54 +14609,68 @@ export function FinanceApp() {
                           </div>
                         );
                       }),
-                      ...ungrouped.map((transaction) => (
-                        <div
-                          key={transaction.id}
-                          className="rounded-2xl border border-slate-200 bg-white px-4 py-3"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div>
-                              <p className="text-sm font-semibold text-slate-900">{transaction.title}</p>
-                              <p className="mt-1 text-sm text-slate-500">
-                                {getDisplayCategoryName(transaction.categoryId, transaction.categoryName)} - {formatShortDate(transaction.date)}
-                              </p>
-                              {transaction.installmentTotal ? (
-                                <span
-                                  title="Cada parcela entra na fatura do mes correspondente, nao no mes da compra."
-                                  className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-semibold text-sky-700"
-                                >
-                                  Parcela {transaction.installmentNumber}/{transaction.installmentTotal}
-                                </span>
-                              ) : null}
+                      ...ungrouped.map((transaction) => {
+                        const isSelected = selectedTransactionIds.includes(transaction.id);
+
+                        return (
+                          <div
+                            key={transaction.id}
+                            className={`rounded-2xl border bg-white px-4 py-3 ${
+                              isSelected ? "border-violet-400 ring-2 ring-violet-200" : "border-slate-200"
+                            }`}
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div className="flex items-start gap-3">
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => toggleTransactionSelection(transaction.id)}
+                                  className="mt-1 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                                />
+                                <div>
+                                  <p className="text-sm font-semibold text-slate-900">{transaction.title}</p>
+                                  <p className="mt-1 text-sm text-slate-500">
+                                    {getDisplayCategoryName(transaction.categoryId, transaction.categoryName)} - {formatShortDate(transaction.date)}
+                                  </p>
+                                  {transaction.installmentTotal ? (
+                                    <span
+                                      title="Cada parcela entra na fatura do mes correspondente, nao no mes da compra."
+                                      className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-semibold text-sky-700"
+                                    >
+                                      Parcela {transaction.installmentNumber}/{transaction.installmentTotal}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-sm font-semibold text-slate-900">
+                                  {formatCurrency(getCreditCardTransactionSignedAmount(transaction))}
+                                </p>
+                                <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                                  {transaction.status}
+                                </p>
+                              </div>
                             </div>
-                            <div className="text-right">
-                              <p className="text-sm font-semibold text-slate-900">
-                                {formatCurrency(getCreditCardTransactionSignedAmount(transaction))}
-                              </p>
-                              <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                                {transaction.status}
-                              </p>
+                            <div className="mt-3 flex flex-wrap justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => requestTransactionAction(transaction, "edit")}
+                                className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                              >
+                                Editar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => requestTransactionAction(transaction, "delete")}
+                                className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+                              >
+                                <Trash2 className="mr-1 inline h-3.5 w-3.5" />
+                                Excluir
+                              </button>
                             </div>
                           </div>
-                          <div className="mt-3 flex flex-wrap justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() => requestTransactionAction(transaction, "edit")}
-                              className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
-                            >
-                              Editar
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => requestTransactionAction(transaction, "delete")}
-                              className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-50"
-                            >
-                              <Trash2 className="mr-1 inline h-3.5 w-3.5" />
-                              Excluir
-                            </button>
-                          </div>
-                        </div>
-                      )),
+                        );
+                      }),
                     ];
                   })()
                 ) : (
