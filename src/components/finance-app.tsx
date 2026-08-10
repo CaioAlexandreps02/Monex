@@ -5186,6 +5186,34 @@ export function FinanceApp() {
     setDraftTransactionError(null);
   }
 
+  function handleDeleteCard(cardId: string) {
+    if (!window.confirm("Tem certeza que deseja excluir este cartao? Transacoes vinculadas serao desvinculadas.")) {
+      return;
+    }
+
+    setCards((current) => current.filter((card) => card.id !== cardId));
+
+    setTransactions((current) =>
+      current.map((transaction) =>
+        transaction.cardId === cardId ? { ...transaction, cardId: undefined, cardMode: undefined } : transaction,
+      ),
+    );
+
+    setFixedEntries((current) =>
+      current.map((entry) => (entry.cardId === cardId ? { ...entry, cardId: undefined } : entry)),
+    );
+
+    if (settings.defaultCardId === cardId) {
+      setSettings((current) => ({ ...current, defaultCardId: "" }));
+    }
+
+    if (selectedCardDetailId === cardId) {
+      closeCardDetails();
+    }
+
+    closeCardModal();
+  }
+
   function handleSaveCardBalance(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setDraftTransactionError(null);
@@ -12805,6 +12833,15 @@ export function FinanceApp() {
             </div>
 
             <div className="flex justify-end gap-3">
+              {editingCardId ? (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteCard(editingCardId)}
+                  className="rounded-2xl border border-red-200 px-4 py-3 text-sm font-semibold text-red-600 transition hover:bg-red-50"
+                >
+                  Excluir cartao
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={closeCardModal}
@@ -14124,6 +14161,13 @@ export function FinanceApp() {
             </button>
             <button
               type="button"
+              onClick={() => handleDeleteCard(selectedCardDetail.id)}
+              className="rounded-full border border-red-200 bg-white px-4 py-2 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+            >
+              Excluir
+            </button>
+            <button
+              type="button"
               onClick={closeCardDetails}
               className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
             >
@@ -14445,6 +14489,16 @@ export function FinanceApp() {
                           className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold transition hover:bg-white/25"
                         >
                           Editar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleDeleteCard(card.id);
+                          }}
+                          className="rounded-full bg-red-500/20 px-3 py-1 text-xs font-semibold text-red-100 transition hover:bg-red-500/30"
+                        >
+                          Excluir
                         </button>
                       </div>
                     </div>
