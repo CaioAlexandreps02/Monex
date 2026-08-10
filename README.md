@@ -38,6 +38,13 @@ Use o arquivo `.env.example` como base:
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
+
+PLUGGY_ENV=sandbox
+PLUGGY_CLIENT_ID=
+PLUGGY_CLIENT_SECRET=
+PLUGGY_API_KEY=
+PLUGGY_WEBHOOK_URL=https://seu-dominio.com/api/webhooks/pluggy
+PLUGGY_OAUTH_REDIRECT_URI=
 ```
 
 ## Estado atual do app
@@ -107,6 +114,14 @@ Checklist recomendado:
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
+- `PLUGGY_CLIENT_ID`
+- `PLUGGY_CLIENT_SECRET`
+- `PLUGGY_API_KEY`
+- `PLUGGY_WEBHOOK_URL`
+
+Para configurar o webhook na Pluggy, use a URL pública do deploy com o caminho `/api/webhooks/pluggy`.
+Exemplo: `https://monex.seu-dominio.com/api/webhooks/pluggy`.
+Essa URL não funciona como `localhost`; ela precisa estar publicada em HTTPS.
 
 ## Próxima etapa recomendada
 

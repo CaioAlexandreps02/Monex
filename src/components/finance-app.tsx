@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 
 import {
   accounts as seedAccounts,
@@ -110,6 +111,11 @@ import {
   Check,
   Pencil,
 } from "lucide-react";
+
+const PluggyConnect = dynamic(
+  () => import("react-pluggy-connect").then((mod) => mod.PluggyConnect),
+  { ssr: false },
+);
 
 type DraftTransaction = {
   title: string;
@@ -1047,6 +1053,18 @@ function splitAutomationList(value: string) {
     .filter(Boolean);
 }
 
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === "object" && "message" in error) {
+    return String((error as { message?: unknown }).message ?? "Erro desconhecido");
+  }
+
+  return "Erro desconhecido";
+}
+
 const shortMonthFormatter = new Intl.DateTimeFormat("pt-BR", { month: "short" });
 
 function buildRelativeMonths(referenceDate: Date) {
@@ -1338,6 +1356,9 @@ export function FinanceApp() {
   const [importAccountId, setImportAccountId] = useState(settings.defaultAccountId);
   const [importCardId, setImportCardId] = useState(settings.defaultCardId);
   const [importError, setImportError] = useState<string | null>(null);
+  const [pluggyConnectToken, setPluggyConnectToken] = useState("");
+  const [pluggyConnectStatus, setPluggyConnectStatus] = useState<"idle" | "loading" | "ready" | "connected" | "error">("idle");
+  const [pluggyConnectError, setPluggyConnectError] = useState<string | null>(null);
   const [selectedCardBillComparison, setSelectedCardBillComparison] = useState<{
     cardId: string;
     monthValue: string;
@@ -2366,6 +2387,63 @@ export function FinanceApp() {
           : config,
       ),
     );
+  }
+
+  async function handleOpenPluggyConnect() {
+    setPluggyConnectStatus("loading");
+    setPluggyConnectError(null);
+
+    try {
+      const response = await fetch("/api/connect-token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          clientUserId: "monex-local-user",
+        }),
+      });
+
+      const payload = (await response.json()) as { accessToken?: string; error?: string; details?: string };
+
+      if (!response.ok || !payload.accessToken) {
+        throw new Error(payload.details || payload.error || "Nao foi possivel criar o token da Pluggy.");
+      }
+
+      setPluggyConnectToken(payload.accessToken);
+      setPluggyConnectStatus("ready");
+    } catch (error) {
+      setPluggyConnectStatus("error");
+      setPluggyConnectError(getErrorMessage(error));
+    }
+  }
+
+  function handlePluggyConnectSuccess(itemData: unknown) {
+    const item = itemData && typeof itemData === "object" && "item" in itemData
+      ? (itemData as { item?: { id?: string; connector?: { name?: string }; connectorId?: number } }).item
+      : undefined;
+    const itemId = item?.id;
+    const providerName = item?.connector?.name ?? "Pluggy";
+
+    handleUpdateImportAutomationConfig("open-finance", {
+      isEnabled: true,
+      status: "active",
+      provider: providerName,
+      externalConnectionId: itemId,
+      authorizedAt: new Date().toISOString(),
+      notes: itemId
+        ? `Conexao Pluggy autorizada. Item ID: ${itemId}.`
+        : "Conexao Pluggy autorizada. Item ID deve ser salvo via webhook ou callback quando disponivel.",
+    });
+    setPluggyConnectStatus("connected");
+    setPluggyConnectToken("");
+    setPluggyConnectError(null);
+  }
+
+  function handlePluggyConnectError(error: unknown) {
+    setPluggyConnectStatus("error");
+    setPluggyConnectError(getErrorMessage(error));
+    setPluggyConnectToken("");
   }
 
   function handleConfirmImportedItem(itemId: string) {
@@ -9204,6 +9282,39 @@ export function FinanceApp() {
                   />
                 </FormField>
 
+                {config.transport === "open_finance" ? (
+                  <div className="mt-3 rounded-[24px] border border-sky-100 bg-sky-50 px-4 py-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">Pluggy Connect</p>
+                        <p className="mt-1 text-xs text-slate-600">
+                          Abre o fluxo seguro da Pluggy para selecionar banco, autenticar e autorizar o compartilhamento.
+                        </p>
+                        {pluggyConnectError ? (
+                          <p className="mt-2 text-xs font-semibold text-red-600">{pluggyConnectError}</p>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleOpenPluggyConnect()}
+                        disabled={pluggyConnectStatus === "loading"}
+                        className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                      >
+                        {pluggyConnectStatus === "loading"
+                          ? "Gerando token"
+                          : config.externalConnectionId
+                            ? "Reconectar"
+                            : "Conectar Pluggy"}
+                      </button>
+                    </div>
+                    {config.externalConnectionId ? (
+                      <p className="mt-3 rounded-2xl bg-white/80 px-3 py-2 text-xs font-semibold text-sky-700">
+                        Item conectado: {config.externalConnectionId}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <div className="mt-4 flex flex-wrap justify-end gap-2">
                   <button
                     type="button"
@@ -9665,6 +9776,22 @@ export function FinanceApp() {
             )}
           </div>
         </Panel>
+
+        {pluggyConnectToken ? (
+          <PluggyConnect
+            connectToken={pluggyConnectToken}
+            includeSandbox
+            language="pt"
+            theme="light"
+            onSuccess={handlePluggyConnectSuccess}
+            onError={handlePluggyConnectError}
+            onLoadError={handlePluggyConnectError}
+            onClose={() => {
+              setPluggyConnectToken("");
+              setPluggyConnectStatus((current) => (current === "connected" ? "connected" : "idle"));
+            }}
+          />
+        ) : null}
 
         {renderImportBrowseModal()}
       </div>

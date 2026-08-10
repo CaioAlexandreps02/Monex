@@ -859,6 +859,47 @@ const btg = connectors.find(c => c.name.includes("BTG"));
 
 ---
 
+## Status implementado no Monex
+
+Data de atualizacao: 10/08/2026
+
+### Ja feito
+
+- [x] Endpoint server-side para criar Connect Token: `src/app/api/connect-token/route.ts`
+- [x] Widget `react-pluggy-connect` integrado na area `Importar > Origens automaticas > Open Finance`
+- [x] Callback de sucesso salvando a origem Open Finance como ativa e registrando o `itemId`
+- [x] Endpoint de webhook publico preparado: `src/app/api/webhooks/pluggy/route.ts`
+- [x] Variaveis de ambiente documentadas em `.env.example`
+
+### Como configurar o webhook na Pluggy
+
+Na tela "Configurar Webhooks", usar a URL publica do deploy:
+
+```text
+https://seu-dominio.com/api/webhooks/pluggy
+```
+
+Em desenvolvimento local, `localhost` nao serve para essa tela. Para testar antes do deploy, usar um tunel HTTPS temporario, como `ngrok` ou o dominio temporario de preview da Vercel.
+
+### O que o webhook faz hoje
+
+- Recebe eventos da Pluggy em `POST /api/webhooks/pluggy`
+- Responde `2xx` com `{ received: true }`
+- Registra evento, `eventId` e `itemId` no log do servidor
+- Se o Supabase estiver configurado, atualiza a configuracao `open-finance` em `app_state`
+- Em `item/created` e `item/updated`, marca Open Finance como ativo
+- Em `item/error`, marca como precisando de autorizacao
+
+### Proxima etapa
+
+- Buscar contas, saldos, cartoes e transacoes da Pluggy usando o `itemId`
+- Transformar transacoes da Pluggy em `ImportedStatementItem`
+- Reusar a revisao/importacao atual para categorizar, deduplicar e confirmar gastos
+- Criar sync manual "Atualizar agora"
+- Depois criar sync automatico com budget/rate limit
+
+---
+
 ## Referências
 
 | Recurso | URL |
