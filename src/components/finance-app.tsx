@@ -5888,30 +5888,34 @@ export function FinanceApp() {
       removeEditedSource();
 
       if (shouldBecomeCardInstallment) {
-        const nextPurchase: PlannedPurchase = {
-          id: `purchase-${crypto.randomUUID()}`,
-          name: title,
-          description: draftCommitment.notes.trim() || undefined,
-          estimatedValue: convertedTotalAmount,
-          priority: "Alta",
-          desiredDate: draftCommitment.startDate,
-          targetMonth: monthValue,
-          scheduleType: "month",
-          specificMonthTarget: true,
-          boardColumn: monthValue === selectedMonth ? "this_month" : "later",
-          savedAmount: 0,
-          suggestedPeriodAmount: installmentAmount || primaryAmount,
-          plannedAmountByMonth: amountByMonth,
-          status: "planned",
-          planningMode: "card_parcelado",
-          plannedPaymentMethod: "card",
-          plannedCardId: draftCommitment.cardId,
-          plannedCardMode: "credit",
-          plannedInstallments: rawInstallments,
-          notes: draftCommitment.notes.trim() || undefined,
-        };
+        const cardBillGroupId = `card-bill-${crypto.randomUUID()}`;
+        const commitmentCategory = categories.find((cat) => cat.id === draftCommitment.categoryId);
+        const newBills: Bill[] = conversionMonths.map((installmentMonth, installmentIndex) => {
+          const isLast = installmentIndex === conversionMonths.length - 1;
+          const accumulated = installmentAmount * installmentIndex;
+          const billAmount = isLast
+            ? Number((convertedTotalAmount - accumulated).toFixed(2))
+            : installmentAmount;
+          return {
+            id: `bill-${crypto.randomUUID()}`,
+            title,
+            amount: billAmount,
+            categoryId: draftCommitment.categoryId,
+            categoryName: commitmentCategory?.name ?? "Compras",
+            dueDate: `${installmentMonth}-28`,
+            priority: "Alta" as FinancePriority,
+            isRecurring: false,
+            status: "pending" as const,
+            plannedPaymentMethod: "card" as PaymentPlanMethod,
+            plannedCardId: draftCommitment.cardId,
+            plannedCardMode: "credit" as CardMode,
+            installments: rawInstallments,
+            recurringGroupId: cardBillGroupId,
+            notes: draftCommitment.notes.trim() || undefined,
+          };
+        });
 
-        setPlannedPurchases((current) => [nextPurchase, ...current]);
+        setBills((current) => [...newBills, ...current]);
         closeCommitmentModal();
         return true;
       }
@@ -7189,14 +7193,13 @@ export function FinanceApp() {
       .map((purchase, index) => {
         const purchaseAmountByMonth = getPlannedPurchaseAmountByMonth(purchase);
         const monthAmount = purchaseAmountByMonth[statementMonth] ?? 0;
-        const totalMonths = Object.values(purchaseAmountByMonth).filter((v) => v > 0).length;
         return {
           id: `purchase-${purchase.id}`,
           title: purchase.name,
           amount: monthAmount,
           support: purchase.plannedInstallments
-            ? `Compra planejada - Parcelado ${purchase.plannedInstallments}x`
-            : "Compra planejada",
+            ? `Parcelado ${purchase.plannedInstallments}x`
+            : "Compra no cartao",
           sortKey: `${purchase.desiredDate ?? "9999"}-${String(index).padStart(4, "0")}`,
           sourceType: "bill" as const,
           sourceId: purchase.id,
