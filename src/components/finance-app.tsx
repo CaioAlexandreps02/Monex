@@ -53,7 +53,6 @@ import type {
   FinancePriority,
   FixedFlowEntry,
   FixedFlowSection,
-  TransactionType,
   ImportAutomationConfig,
   ImportTransport,
   ImportLearningRule,
@@ -109,7 +108,6 @@ import {
   Calendar,
   CheckCircle2,
   Check,
-  Pencil,
 } from "lucide-react";
 
 const PluggyConnect = dynamic(
@@ -769,8 +767,8 @@ const fixedSectionStyles: Record<FixedFlowSection, string> = {
 
 const fixedSectionDisplayLabels: Record<FixedFlowSection, string> = {
   Ganhos: "Ganhos",
-  Contas: "Contas",
-  Planejamento: "Contas",
+  Contas: "Gastos",
+  Planejamento: "Gastos",
   "Gastos fixos": "Contas fixas",
   "Dividas e repasses": "Dividas e acordos",
   "Compras planejadas": "Compras planejadas",
@@ -1394,9 +1392,6 @@ export function FinanceApp() {
     "Dividas e repasses": false,
     "Compras planejadas": false,
   });
-  const [inlineNewEntry, setInlineNewEntry] = useState<{ section: FixedFlowSection } | null>(null);
-  const [inlineNewEntryTitle, setInlineNewEntryTitle] = useState("");
-  const [inlineNewEntryAmounts, setInlineNewEntryAmounts] = useState<Record<string, string>>({});
   const [expandedCardBillRows, setExpandedCardBillRows] = useState<Record<string, boolean>>({});
   const remoteSaveInFlightRef = useRef(false);
   const pendingRemoteSnapshotRef = useRef<FinancePersistedState | null>(null);
@@ -6333,66 +6328,6 @@ export function FinanceApp() {
     closeCommitmentModal();
   }
 
-  function handleStartInlineEntry(section: FixedFlowSection) {
-    setInlineNewEntry({ section });
-    setInlineNewEntryTitle("");
-    setInlineNewEntryAmounts(
-      Object.fromEntries(salaryCalendarMonths.map((monthItem) => [monthItem.monthValue, ""])),
-    );
-  }
-
-  function handleCancelInlineEntry() {
-    setInlineNewEntry(null);
-    setInlineNewEntryTitle("");
-    setInlineNewEntryAmounts({});
-  }
-
-  function handleConfirmInlineEntry() {
-    if (!inlineNewEntry) return;
-
-    const title = inlineNewEntryTitle.trim();
-    if (!title) return;
-
-    const amountByMonth = Object.fromEntries(
-      salaryCalendarMonths.map((monthItem) => [
-        monthItem.monthValue,
-        Number(inlineNewEntryAmounts[monthItem.monthValue]?.replace(",", ".")) || 0,
-      ]),
-    ) as Record<string, number>;
-
-    const hasAtLeastOneAmount = Object.values(amountByMonth).some((value) => value > 0);
-    if (!hasAtLeastOneAmount) return;
-
-    const section = inlineNewEntry.section;
-    const kind: TransactionType = section === "Ganhos" ? "income" : "expense";
-    const categoryId = getDefaultCategoryIdForFixedSection(section);
-    const category = categories.find((item) => item.id === categoryId) ?? categories[0];
-
-    const nextEntry: FixedFlowEntry = {
-      id: `fixed-${crypto.randomUUID()}`,
-      section: section === "Ganhos" ? "Ganhos" : "Contas",
-      title,
-      kind,
-      categoryId: category?.id ?? "",
-      categoryName: category?.name ?? "",
-      amountByMonth,
-      completedMonths: [],
-      paymentMethod: "pix",
-      accountId: settings.defaultAccountId,
-      notes: undefined,
-    };
-
-    setFixedEntries((current) => [nextEntry, ...current]);
-    handleCancelInlineEntry();
-  }
-
-  function handleInlineEntryAmountChange(monthValue: string, value: string) {
-    setInlineNewEntryAmounts((current) => ({
-      ...current,
-      [monthValue]: value,
-    }));
-  }
-
   function handleDeleteDebt(debtId: string) {
     setDebts((current) => current.filter((debt) => debt.id !== debtId));
     setFixedEntries((current) => current.filter((entry) => entry.linkedDebtId !== debtId));
@@ -10022,9 +9957,15 @@ export function FinanceApp() {
                         <div className="flex flex-wrap items-start gap-2">
                           <button
                             type="button"
-                            onClick={() => handleStartInlineEntry(section)}
+                            onClick={() =>
+                              openCommitmentModal(
+                                section === "Ganhos"
+                                  ? { kind: "income", schedule: "recurring", paymentMethod: "pix" }
+                                  : { kind: "expense", schedule: "once", paymentMethod: "pix" },
+                              )
+                            }
                             aria-label={`Adicionar em ${fixedSectionDisplayLabels[section]}`}
-                            title={`Adicionar ${section === "Ganhos" ? "ganho" : "conta"}`}
+                            title={`Adicionar ${section === "Ganhos" ? "ganho" : "gasto"}`}
                             className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white transition hover:bg-slate-700"
                           >
                             <Plus className="h-4 w-4" />
@@ -10074,91 +10015,6 @@ export function FinanceApp() {
                               </tr>
                             </thead>
                             <tbody>
-                              {inlineNewEntry?.section === section ? (
-                                <tr className="inline-entry-enter">
-                                  <th className="sticky left-0 z-20 w-[180px] border border-dashed border-sky-300 bg-white p-1.5 text-left">
-                                    <div className="flex flex-col gap-1">
-                                      <input
-                                        value={inlineNewEntryTitle}
-                                        onChange={(event) => setInlineNewEntryTitle(event.target.value)}
-                                        onKeyDown={(event) => {
-                                          if (event.key === "Enter") {
-                                            event.preventDefault();
-                                            handleConfirmInlineEntry();
-                                          }
-                                          if (event.key === "Escape") {
-                                            event.preventDefault();
-                                            handleCancelInlineEntry();
-                                          }
-                                        }}
-                                        autoFocus
-                                        placeholder="Novo item..."
-                                        className="w-full rounded-lg border border-sky-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-900 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-200"
-                                      />
-                                      <div className="flex gap-1">
-                                        <button
-                                          type="button"
-                                          onClick={handleConfirmInlineEntry}
-                                          className="flex h-6 flex-1 items-center justify-center rounded-lg bg-sky-500 text-[10px] font-semibold text-white transition hover:bg-sky-600"
-                                        >
-                                          <Check className="h-3 w-3" />
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={handleCancelInlineEntry}
-                                          className="flex h-6 flex-1 items-center justify-center rounded-lg bg-slate-200 text-[10px] font-semibold text-slate-600 transition hover:bg-slate-300"
-                                        >
-                                          <X className="h-3 w-3" />
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            handleCancelInlineEntry();
-                                            openCommitmentModal(
-                                              section === "Ganhos"
-                                                ? { kind: "income", schedule: "recurring", paymentMethod: "pix" }
-                                                : { kind: "expense", schedule: "once", paymentMethod: "pix" },
-                                            );
-                                          }}
-                                          className="flex h-6 items-center justify-center rounded-lg bg-white px-2 text-[10px] font-semibold text-slate-500 transition hover:bg-slate-100"
-                                          title="Edição completa"
-                                        >
-                                          <Pencil className="h-3 w-3" />
-                                        </button>
-                                      </div>
-                                    </div>
-                                  </th>
-                                  {salaryCalendarMonths.map((monthItem) => (
-                                    <td
-                                      key={`inline-${monthItem.monthValue}`}
-                                      className={`border border-dashed border-sky-300 p-1 ${
-                                        monthItem.monthValue === selectedMonth ? "bg-sky-100/80 ring-1 ring-sky-200" : "bg-white"
-                                      }`}
-                                    >
-                                      <input
-                                        value={inlineNewEntryAmounts[monthItem.monthValue] ?? ""}
-                                        onChange={(event) => handleInlineEntryAmountChange(monthItem.monthValue, event.target.value)}
-                                        onKeyDown={(event) => {
-                                          if (event.key === "Enter") {
-                                            event.preventDefault();
-                                            handleConfirmInlineEntry();
-                                          }
-                                          if (event.key === "Escape") {
-                                            event.preventDefault();
-                                            handleCancelInlineEntry();
-                                          }
-                                        }}
-                                        inputMode="decimal"
-                                        placeholder="0"
-                                        className="w-full bg-transparent text-[11px] font-semibold leading-tight outline-none placeholder:text-slate-300"
-                                      />
-                                    </td>
-                                  ))}
-                                  <td className="border border-sky-200 bg-white p-1 text-center text-[11px] font-semibold text-slate-400">
-                                    —
-                                  </td>
-                                </tr>
-                              ) : null}
                               {rowGroups.map((group, groupIndex) => (
                                 <Fragment key={group.key}>
                                   {section === "Contas" && groupIndex > 0 ? (
@@ -10175,32 +10031,6 @@ export function FinanceApp() {
                                           <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                                             {group.key}
                                           </span>
-                                          {group.key === "Faturas" ? (
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                openPurchaseModal(undefined, {
-                                                  planningMode: "card_parcelado",
-                                                  paymentOption: "card",
-                                                })
-                                              }
-                                              title="Nova compra no cartão"
-                                              className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-slate-600 transition hover:bg-slate-300"
-                                              aria-label="Nova compra no cartão"
-                                            >
-                                              <Plus className="h-3 w-3" />
-                                            </button>
-                                          ) : group.key === "Dividas e acordos" ? (
-                                            <button
-                                              type="button"
-                                              onClick={() => openDebtModal()}
-                                              title="Nova dívida"
-                                              className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-slate-600 transition hover:bg-slate-300"
-                                              aria-label="Nova dívida"
-                                            >
-                                              <Plus className="h-3 w-3" />
-                                            </button>
-                                          ) : null}
                                         </div>
                                       </td>
                                     </tr>
