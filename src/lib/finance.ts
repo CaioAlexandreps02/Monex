@@ -9,6 +9,7 @@ import type {
   PlannedPurchase,
   Settings,
   Transaction,
+  TransactionGroup,
 } from "@/types/finance";
 
 const currencyFormatter = new Intl.NumberFormat("pt-BR", {
@@ -498,4 +499,109 @@ export function getInvestmentSnapshot(investments: Investment[]) {
     totalCurrent,
     gain: totalCurrent - totalGross,
   };
+}
+
+// ============================================================
+// Transaction Groups
+// ============================================================
+
+export function createTransactionGroup(
+  nome: string,
+  transactionIds: string[],
+  transactions: Transaction[],
+  groups: TransactionGroup[],
+): { group: TransactionGroup; updatedTransactions: Transaction[] } {
+  const id = `grp-${nome
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[^\w\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")}-${Date.now()}`;
+
+  const group: TransactionGroup = {
+    id,
+    nome: nome.trim(),
+    createdAt: new Date().toISOString(),
+  };
+
+  const updatedTransactions = transactions.map((t) =>
+    transactionIds.includes(t.id) ? { ...t, groupId: id } : t,
+  );
+
+  return { group, updatedTransactions };
+}
+
+export function deleteTransactionGroup(
+  groupId: string,
+  transactions: Transaction[],
+  groups: TransactionGroup[],
+): { updatedTransactions: Transaction[]; updatedGroups: TransactionGroup[] } {
+  return {
+    updatedTransactions: transactions.map((t) =>
+      t.groupId === groupId ? { ...t, groupId: undefined } : t,
+    ),
+    updatedGroups: groups.filter((g) => g.id !== groupId),
+  };
+}
+
+export function renameTransactionGroup(
+  groupId: string,
+  newNome: string,
+  groups: TransactionGroup[],
+): TransactionGroup[] {
+  return groups.map((g) => (g.id === groupId ? { ...g, nome: newNome.trim() } : g));
+}
+
+export function addToGroup(
+  groupId: string,
+  transactionIds: string[],
+  transactions: Transaction[],
+): Transaction[] {
+  return transactions.map((t) =>
+    transactionIds.includes(t.id) ? { ...t, groupId } : t,
+  );
+}
+
+export function removeFromGroup(
+  transactionIds: string[],
+  transactions: Transaction[],
+): Transaction[] {
+  return transactions.map((t) =>
+    transactionIds.includes(t.id) ? { ...t, groupId: undefined } : t,
+  );
+}
+
+export function getGroupTotal(groupId: string, transactions: Transaction[]): number {
+  return transactions
+    .filter((t) => t.groupId === groupId)
+    .reduce((sum, t) => sum + t.amount, 0);
+}
+
+export function getGroupTransactions(
+  groupId: string,
+  transactions: Transaction[],
+): Transaction[] {
+  return transactions.filter((t) => t.groupId === groupId);
+}
+
+export function getTransactionGroups(
+  groups: TransactionGroup[],
+  transactions: Transaction[],
+): Array<TransactionGroup & { total: number; transactionCount: number }> {
+  return groups
+    .map((group) => ({
+      ...group,
+      total: getGroupTotal(group.id, transactions),
+      transactionCount: transactions.filter((t) => t.groupId === group.id).length,
+    }))
+    .filter((group) => group.transactionCount > 0);
+}
+
+export function cleanupEmptyGroups(
+  groups: TransactionGroup[],
+  transactions: Transaction[],
+): TransactionGroup[] {
+  return groups.filter((group) =>
+    transactions.some((t) => t.groupId === group.id),
+  );
 }

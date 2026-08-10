@@ -32,6 +32,14 @@ import {
   getBoardColumns,
   getCardSummaries,
   getCategoryBreakdown,
+  createTransactionGroup,
+  deleteTransactionGroup,
+  renameTransactionGroup,
+  addToGroup,
+  removeFromGroup,
+  getGroupTotal,
+  getGroupTransactions,
+  getTransactionGroups,
   getInvestmentSnapshot,
   getMonthlySummary,
   getMonthlyTrend,
@@ -67,6 +75,7 @@ import type {
   PaymentMethod,
   PlannedPurchase,
   Transaction,
+  TransactionGroup,
   ViewId,
 } from "@/types/finance";
 import {
@@ -469,6 +478,7 @@ type FinancePersistedState = {
   accounts: Account[];
   cards: Card[];
   transactions: Transaction[];
+  transactionGroups: TransactionGroup[];
   bills: Bill[];
   categories: Category[];
   debts: Debt[];
@@ -1259,6 +1269,12 @@ export function FinanceApp() {
   const [accounts, setAccounts] = useState(seedAccounts);
   const [cards, setCards] = useState(seedCards);
   const [transactions, setTransactions] = useState(seedTransactions);
+  const [transactionGroups, setTransactionGroups] = useState<TransactionGroup[]>([]);
+  const [selectedTransactionIds, setSelectedTransactionIds] = useState<string[]>([]);
+  const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [draftGroupName, setDraftGroupName] = useState("");
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
   const [bills, setBills] = useState(seedBills);
   const [categories, setCategories] = useState(seedCategories);
   const [debts, setDebts] = useState(seedDebts);
@@ -2547,6 +2563,7 @@ export function FinanceApp() {
       accounts,
       cards,
       transactions,
+      transactionGroups,
       bills,
       categories,
       debts,
@@ -2567,6 +2584,7 @@ export function FinanceApp() {
       accounts,
       cards,
       transactions,
+      transactionGroups,
       bills,
       categories,
       debts,
@@ -2654,6 +2672,7 @@ export function FinanceApp() {
     if (persisted.accounts) setAccounts(persisted.accounts);
     if (persisted.cards) setCards(persisted.cards);
     if (persisted.transactions) setTransactions(persisted.transactions);
+    if (persisted.transactionGroups) setTransactionGroups(persisted.transactionGroups);
     if (persisted.bills) setBills(persisted.bills);
     if (persisted.categories) setCategories(persisted.categories);
     if (persisted.debts) setDebts(persisted.debts);
@@ -5213,6 +5232,96 @@ export function FinanceApp() {
 
     closeCardModal();
   }
+
+  // ============================================================
+  // Transaction Groups
+  // ============================================================
+
+  function handleCreateGroup() {
+    if (!draftGroupName.trim() || selectedTransactionIds.length < 2) {
+      return;
+    }
+
+    const { group, updatedTransactions } = createTransactionGroup(
+      draftGroupName,
+      selectedTransactionIds,
+      transactions,
+      transactionGroups,
+    );
+
+    setTransactionGroups((current) => [...current, group]);
+    setTransactions(updatedTransactions);
+    setSelectedTransactionIds([]);
+    setDraftGroupName("");
+    setIsGroupModalOpen(false);
+  }
+
+  function handleDeleteGroup(groupId: string) {
+    if (!window.confirm("Tem certeza que deseja excluir este grupo? As transacoes serao mantidas individualmente.")) {
+      return;
+    }
+
+    const { updatedTransactions, updatedGroups } = deleteTransactionGroup(
+      groupId,
+      transactions,
+      transactionGroups,
+    );
+
+    setTransactions(updatedTransactions);
+    setTransactionGroups(updatedGroups);
+
+    if (expandedGroupId === groupId) {
+      setExpandedGroupId(null);
+    }
+  }
+
+  function handleRenameGroup() {
+    if (!editingGroupId || !draftGroupName.trim()) {
+      return;
+    }
+
+    setTransactionGroups(renameTransactionGroup(editingGroupId, draftGroupName, transactionGroups));
+    setEditingGroupId(null);
+    setDraftGroupName("");
+  }
+
+  function handleAddToGroup(groupId: string, transactionIds: string[]) {
+    setTransactions(addToGroup(groupId, transactionIds, transactions));
+  }
+
+  function handleRemoveFromGroup(transactionIds: string[]) {
+    setTransactions(removeFromGroup(transactionIds, transactions));
+  }
+
+  function openGroupModal() {
+    if (selectedTransactionIds.length < 2) {
+      return;
+    }
+
+    const firstTransaction = transactions.find((t) => t.id === selectedTransactionIds[0]);
+    setDraftGroupName(firstTransaction?.title ?? "");
+    setIsGroupModalOpen(true);
+  }
+
+  function closeGroupModal() {
+    setIsGroupModalOpen(false);
+    setEditingGroupId(null);
+    setDraftGroupName("");
+  }
+
+  function toggleTransactionSelection(transactionId: string) {
+    setSelectedTransactionIds((current) =>
+      current.includes(transactionId)
+        ? current.filter((id) => id !== transactionId)
+        : [...current, transactionId],
+    );
+  }
+
+  function clearTransactionSelection() {
+    setSelectedTransactionIds([]);
+  }
+
+  const enrichedGroups = getTransactionGroups(transactionGroups, transactions);
 
   function handleSaveCardBalance(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -10537,38 +10646,84 @@ export function FinanceApp() {
               </div>
 
               <div className="mt-5 space-y-3">
-                {filteredTransactions.map((transaction) => (
-                  <div
-                    key={transaction.id}
-                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-[0_18px_42px_rgba(15,23,42,0.05)]"
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900">{transaction.title}</p>
-                        <p className="mt-1 text-sm text-slate-500">
-                          {getDisplayCategoryName(transaction.categoryId, transaction.categoryName)} - {paymentLabels[transaction.paymentMethod]} -{" "}
-                          {formatShortDate(transaction.date)}
-                        </p>
-                        {transaction.description ? (
-                          <p className="mt-2 text-sm text-slate-500">{transaction.description}</p>
-                        ) : null}
-                      </div>
-                      <div className="text-right">
-                        <p
-                          className={`text-lg font-semibold ${
-                            transaction.type === "income" ? "text-emerald-600" : "text-red-500"
-                          }`}
-                        >
-                          {transaction.type === "income" ? "+" : "-"}
-                          {formatCurrency(transaction.amount)}
-                        </p>
-                        <p className="mt-1 text-xs uppercase tracking-[0.24em] text-slate-400">
-                          {transaction.status}
-                        </p>
-                      </div>
+                {selectedTransactionIds.length > 0 && (
+                  <div className="flex items-center justify-between rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3">
+                    <p className="text-sm font-semibold text-violet-700">
+                      {selectedTransactionIds.length} {selectedTransactionIds.length === 1 ? "selecionada" : "selecionadas"}
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={clearTransactionSelection}
+                        className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                      >
+                        Limpar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={openGroupModal}
+                        disabled={selectedTransactionIds.length < 2}
+                        className="rounded-full bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:opacity-50"
+                      >
+                        Agrupar
+                      </button>
                     </div>
                   </div>
-                ))}
+                )}
+                {filteredTransactions.map((transaction) => {
+                  const isSelected = selectedTransactionIds.includes(transaction.id);
+                  const group = transaction.groupId ? transactionGroups.find((g) => g.id === transaction.groupId) : null;
+
+                  return (
+                    <div
+                      key={transaction.id}
+                      className={`rounded-2xl border bg-white px-4 py-3 shadow-[0_18px_42px_rgba(15,23,42,0.05)] ${
+                        isSelected ? "border-violet-400 ring-2 ring-violet-200" : "border-slate-200"
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleTransactionSelection(transaction.id)}
+                            className="mt-1 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                          />
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-semibold text-slate-900">{transaction.title}</p>
+                              {group && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
+                                  📦 {group.nome}
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-1 text-sm text-slate-500">
+                              {getDisplayCategoryName(transaction.categoryId, transaction.categoryName)} - {paymentLabels[transaction.paymentMethod]} -{" "}
+                              {formatShortDate(transaction.date)}
+                            </p>
+                            {transaction.description ? (
+                              <p className="mt-2 text-sm text-slate-500">{transaction.description}</p>
+                            ) : null}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p
+                            className={`text-lg font-semibold ${
+                              transaction.type === "income" ? "text-emerald-600" : "text-red-500"
+                            }`}
+                          >
+                            {transaction.type === "income" ? "+" : "-"}
+                            {formatCurrency(transaction.amount)}
+                          </p>
+                          <p className="mt-1 text-xs uppercase tracking-[0.24em] text-slate-400">
+                            {transaction.status}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </Panel>
           </div>
@@ -10892,6 +11047,102 @@ export function FinanceApp() {
             </div>
           </div>
         ) : null}
+
+        {isGroupModalOpen ? renderGlobalModal(
+          <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
+            <div className="w-full max-w-md rounded-[30px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-violet-600">
+                    {editingGroupId ? "Editar grupo" : "Novo grupo"}
+                  </p>
+                  <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                    {editingGroupId ? "Renomear grupo" : "Agrupar transacoes"}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeGroupModal}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-600 transition hover:bg-slate-200"
+                  aria-label="Fechar modal"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (editingGroupId) {
+                    handleRenameGroup();
+                  } else {
+                    handleCreateGroup();
+                  }
+                }}
+                className="mt-6 space-y-4"
+              >
+                <FormField label="Nome do grupo">
+                  <input
+                    value={draftGroupName}
+                    onChange={(event) => setDraftGroupName(event.target.value)}
+                    placeholder="Ex.: Compra Amazon, iFood noite"
+                    className="field"
+                    autoFocus
+                  />
+                </FormField>
+
+                {!editingGroupId && selectedTransactionIds.length > 0 && (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">
+                      Transacoes selecionadas ({selectedTransactionIds.length})
+                    </p>
+                    <div className="mt-2 space-y-1">
+                      {selectedTransactionIds.slice(0, 5).map((id) => {
+                        const t = transactions.find((tx) => tx.id === id);
+                        return t ? (
+                          <p key={id} className="text-sm text-slate-700">
+                            {t.title} - {formatCurrency(t.amount)}
+                          </p>
+                        ) : null;
+                      })}
+                      {selectedTransactionIds.length > 5 && (
+                        <p className="text-xs text-slate-500">
+                          ...e mais {selectedTransactionIds.length - 5}
+                        </p>
+                      )}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">
+                      Total: {formatCurrency(
+                        selectedTransactionIds.reduce((sum, id) => {
+                          const t = transactions.find((tx) => tx.id === id);
+                          return sum + (t?.amount ?? 0);
+                        }, 0),
+                      )}
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={closeGroupModal}
+                    className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!draftGroupName.trim() || (!editingGroupId && selectedTransactionIds.length < 2)}
+                    className="rounded-2xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:opacity-50"
+                  >
+                    {editingGroupId ? "Salvar" : "Criar grupo"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        ) : null}
+
         {transactionScopePrompt ? renderGlobalModal(
           <div className="fixed inset-0 z-[1010] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
             <div className="w-full max-w-md rounded-[28px] border border-white/70 bg-white p-6 shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
@@ -14272,54 +14523,123 @@ export function FinanceApp() {
             >
               <div className="space-y-3">
                 {selectedCardStatementTransactions.length ? (
-                  selectedCardStatementTransactions.map((transaction) => (
-                    <div
-                      key={transaction.id}
-                      className="rounded-2xl border border-slate-200 bg-white px-4 py-3"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">{transaction.title}</p>
-                          <p className="mt-1 text-sm text-slate-500">
-                            {getDisplayCategoryName(transaction.categoryId, transaction.categoryName)} - {formatShortDate(transaction.date)}
-                          </p>
-                          {transaction.installmentTotal ? (
-                            <span
-                              title="Cada parcela entra na fatura do mes correspondente, nao no mes da compra."
-                              className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-semibold text-sky-700"
+                  (() => {
+                    const grouped: Transaction[] = [];
+                    const ungrouped: Transaction[] = [];
+                    const groupMap = new Map<string, Transaction[]>();
+
+                    for (const t of selectedCardStatementTransactions) {
+                      if (t.groupId) {
+                        if (!groupMap.has(t.groupId)) {
+                          groupMap.set(t.groupId, []);
+                        }
+                        groupMap.get(t.groupId)!.push(t);
+                        if (!grouped.some((gt) => gt.groupId === t.groupId)) {
+                          grouped.push(t);
+                        }
+                      } else {
+                        ungrouped.push(t);
+                      }
+                    }
+
+                    return [
+                      ...Array.from(groupMap.entries()).map(([groupId, groupTransactions]) => {
+                        const group = transactionGroups.find((g) => g.id === groupId);
+                        const total = groupTransactions.reduce((sum, t) => sum + t.amount, 0);
+                        const isExpanded = expandedGroupId === groupId;
+
+                        return (
+                          <div key={`group-${groupId}`} className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3">
+                            <div
+                              className="flex cursor-pointer items-center justify-between gap-3"
+                              onClick={() => setExpandedGroupId(isExpanded ? null : groupId)}
                             >
-                              Parcela {transaction.installmentNumber}/{transaction.installmentTotal}
-                            </span>
-                          ) : null}
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm font-semibold text-slate-900">
-                            {formatCurrency(getCreditCardTransactionSignedAmount(transaction))}
-                          </p>
-                          <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                            {transaction.status}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="mt-3 flex flex-wrap justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={() => requestTransactionAction(transaction, "edit")}
-                          className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                              <div className="flex items-center gap-3">
+                                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-violet-100 text-sm">
+                                  📦
+                                </span>
+                                <div>
+                                  <p className="text-sm font-semibold text-slate-900">{group?.nome ?? "Grupo"}</p>
+                                  <p className="mt-0.5 text-xs text-violet-600">
+                                    {groupTransactions.length} {groupTransactions.length === 1 ? "item" : "itens"}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-sm font-semibold text-slate-900">{formatCurrency(total)}</p>
+                                <p className="mt-0.5 text-xs text-slate-500">
+                                  {isExpanded ? "Recolher" : "Expandir"}
+                                </p>
+                              </div>
+                            </div>
+                            {isExpanded && (
+                              <div className="mt-3 space-y-2 border-t border-violet-200 pt-3">
+                                {groupTransactions.map((t) => (
+                                  <div key={t.id} className="flex items-center justify-between rounded-xl bg-white px-3 py-2">
+                                    <div>
+                                      <p className="text-sm font-medium text-slate-700">{t.title}</p>
+                                      <p className="text-xs text-slate-500">
+                                        {getDisplayCategoryName(t.categoryId, t.categoryName)} - {formatShortDate(t.date)}
+                                      </p>
+                                    </div>
+                                    <p className="text-sm font-semibold text-slate-900">{formatCurrency(t.amount)}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }),
+                      ...ungrouped.map((transaction) => (
+                        <div
+                          key={transaction.id}
+                          className="rounded-2xl border border-slate-200 bg-white px-4 py-3"
                         >
-                          Editar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => requestTransactionAction(transaction, "delete")}
-                          className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-50"
-                        >
-                          <Trash2 className="mr-1 inline h-3.5 w-3.5" />
-                          Excluir
-                        </button>
-                      </div>
-                    </div>
-                  ))
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">{transaction.title}</p>
+                              <p className="mt-1 text-sm text-slate-500">
+                                {getDisplayCategoryName(transaction.categoryId, transaction.categoryName)} - {formatShortDate(transaction.date)}
+                              </p>
+                              {transaction.installmentTotal ? (
+                                <span
+                                  title="Cada parcela entra na fatura do mes correspondente, nao no mes da compra."
+                                  className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-semibold text-sky-700"
+                                >
+                                  Parcela {transaction.installmentNumber}/{transaction.installmentTotal}
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className="text-right">
+                              <p className="text-sm font-semibold text-slate-900">
+                                {formatCurrency(getCreditCardTransactionSignedAmount(transaction))}
+                              </p>
+                              <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                                {transaction.status}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="mt-3 flex flex-wrap justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => requestTransactionAction(transaction, "edit")}
+                              className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => requestTransactionAction(transaction, "delete")}
+                              className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+                            >
+                              <Trash2 className="mr-1 inline h-3.5 w-3.5" />
+                              Excluir
+                            </button>
+                          </div>
+                        </div>
+                      )),
+                    ];
+                  })()
                 ) : (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-600">
                     Nenhum lancamento de credito apareceu nesse mes ainda.

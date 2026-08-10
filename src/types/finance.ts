@@ -110,6 +110,13 @@ export interface Transaction {
   sourceBillId?: string;
   linkedPlannedPurchaseId?: string;
   notes?: string;
+  groupId?: string;
+}
+
+export interface TransactionGroup {
+  id: string;
+  nome: string;
+  createdAt: string;
 }
 
 export interface Bill {
