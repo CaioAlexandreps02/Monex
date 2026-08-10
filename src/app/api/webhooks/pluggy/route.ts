@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 const APP_STATE_KEY = "default";
 const SUPABASE_REQUEST_TIMEOUT_MS = 4000;
+const PLUGGY_ITEM_EVENT_PREFIX = "item/";
 
 type PluggyWebhookEvent = {
   event?: string;
@@ -146,14 +147,21 @@ async function updateOpenFinanceAutomation(event: PluggyWebhookEvent) {
   return saveResponse.ok;
 }
 
-export async function POST(request: Request) {
-  let event: PluggyWebhookEvent;
+async function parseWebhookEvent(request: Request) {
+  const rawBody = await request.text();
 
-  try {
-    event = (await request.json()) as PluggyWebhookEvent;
-  } catch {
-    return NextResponse.json({ received: false, error: "Invalid JSON payload." }, { status: 400 });
+  if (!rawBody.trim()) {
+    return {} as PluggyWebhookEvent;
   }
+
+  return JSON.parse(rawBody) as PluggyWebhookEvent;
+}
+
+export async function POST(request: Request) {
+  const event = await parseWebhookEvent(request).catch((error: unknown) => {
+    console.warn("Received Pluggy webhook with invalid JSON payload", error);
+    return {} as PluggyWebhookEvent;
+  });
 
   console.info("Received Pluggy webhook", {
     event: event.event,
@@ -161,14 +169,17 @@ export async function POST(request: Request) {
     itemId: event.itemId,
   });
 
-  const stateUpdated = await updateOpenFinanceAutomation(event).catch((error: unknown) => {
-    console.error("Could not update Open Finance automation from Pluggy webhook", error);
-    return false;
-  });
+  const shouldUpdateState = Boolean(event.itemId && event.event?.startsWith(PLUGGY_ITEM_EVENT_PREFIX));
+
+  if (shouldUpdateState) {
+    void updateOpenFinanceAutomation(event).catch((error: unknown) => {
+      console.error("Could not update Open Finance automation from Pluggy webhook", error);
+    });
+  }
 
   return NextResponse.json({
     received: true,
-    stateUpdated,
+    stateUpdateQueued: shouldUpdateState,
   });
 }
 
