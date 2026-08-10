@@ -2673,11 +2673,61 @@ export function FinanceApp() {
     if (persisted.cards) setCards(persisted.cards);
     if (persisted.transactions) setTransactions(persisted.transactions);
     if (persisted.transactionGroups) setTransactionGroups(persisted.transactionGroups);
-    if (persisted.bills) setBills(persisted.bills);
+
+    const migratedBills: Bill[] = persisted.bills ? [...persisted.bills] : [];
+    let migratedPlannedPurchases = persisted.plannedPurchases ?? [];
+
+    const purchasesToConvert = migratedPlannedPurchases.filter(
+      (purchase) =>
+        purchase.planningMode === "card_parcelado" &&
+        purchase.plannedCardId &&
+        purchase.estimatedValue > 0 &&
+        purchase.status !== "cancelled",
+    );
+
+    if (purchasesToConvert.length > 0) {
+      const billGroupId = `migrated-${crypto.randomUUID()}`;
+      for (const purchase of purchasesToConvert) {
+        const targetMonth = purchase.targetMonth ?? purchase.desiredDate?.slice(0, 7) ?? getTodayMonthValue();
+        const installments = Math.max(1, purchase.plannedInstallments ?? 1);
+        const installmentValue = Number((purchase.estimatedValue / installments).toFixed(2));
+
+        for (let i = 0; i < installments; i++) {
+          const installmentMonth = getMonthValueOffset(targetMonth, i);
+          const isLast = i === installments - 1;
+          const accumulated = installmentValue * i;
+          migratedBills.push({
+            id: `bill-migrated-${crypto.randomUUID()}`,
+            title: purchase.name,
+            amount: isLast
+              ? Number((purchase.estimatedValue - accumulated).toFixed(2))
+              : installmentValue,
+            categoryId: "cat-bills",
+            categoryName: "Compras",
+            dueDate: `${installmentMonth}-28`,
+            priority: purchase.priority ?? "Alta",
+            isRecurring: false,
+            status: "pending",
+            plannedPaymentMethod: "card",
+            plannedCardId: purchase.plannedCardId,
+            plannedCardMode: purchase.plannedCardMode ?? "credit",
+            installments,
+            recurringGroupId: billGroupId,
+            notes: purchase.description,
+          });
+        }
+      }
+
+      migratedPlannedPurchases = migratedPlannedPurchases.filter(
+        (p) => !purchasesToConvert.some((c) => c.id === p.id),
+      );
+    }
+
+    if (migratedBills.length > 0) setBills(migratedBills);
     if (persisted.categories) setCategories(persisted.categories);
     if (persisted.debts) setDebts(persisted.debts);
     if (persisted.fixedEntries) setFixedEntries(persisted.fixedEntries);
-    if (persisted.plannedPurchases) setPlannedPurchases(persisted.plannedPurchases);
+    if (migratedPlannedPurchases.length > 0) setPlannedPurchases(migratedPlannedPurchases);
     if (persisted.investments) setInvestments(persisted.investments);
     if (persisted.cardBillEstimates) setCardBillEstimates(persisted.cardBillEstimates);
     if (persisted.importedStatementBatches) setImportedStatementBatches(persisted.importedStatementBatches);
