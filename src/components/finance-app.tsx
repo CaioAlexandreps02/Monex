@@ -7439,7 +7439,9 @@ export function FinanceApp() {
         (purchase) =>
           purchase.status !== "cancelled" &&
           purchase.status !== "bought" &&
-          !realizedPlannedPurchaseIds.has(purchase.id),
+          !realizedPlannedPurchaseIds.has(purchase.id) &&
+          // Exclui compras cart_parcelado com cartão vinculado — elas já aparecem na fatura do cartão
+          !(purchase.planningMode === "card_parcelado" && purchase.plannedCardId),
       )
       .map((purchase) => {
         const category = getPlannedPurchaseCategory(purchase);
