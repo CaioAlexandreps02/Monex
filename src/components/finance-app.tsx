@@ -10496,16 +10496,80 @@ export function FinanceApp() {
                                         );
                                       }
 
-                                      return itemRows.map((item) => (
-                                        <tr key={`${row.id}-${item.id}`} className="align-top">
-                                          <th className="sticky left-0 z-20 w-[180px] border border-slate-200 bg-white px-2 py-2.5 text-left">
-                                            <div className="rounded-xl px-1 py-1">
-                                              <p className="text-xs font-semibold text-slate-900">{item.title}</p>
-                                              <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">
-                                                {item.support}
-                                              </p>
+                                      const billSelectedItemIds = itemRows
+                                        .filter((item) => selectedTransactionIds.includes(item.id))
+                                        .map((item) => item.id);
+
+                                      return [
+                                        <tr key={`${row.id}-header`} className="align-top">
+                                          <th className="sticky left-0 z-20 w-[180px] border border-slate-200 bg-violet-50 px-2 py-2.5 text-left">
+                                            <div className="flex items-center justify-between gap-2">
+                                              <p className="text-xs font-semibold text-violet-700">Itens da fatura</p>
+                                              {billSelectedItemIds.length >= 2 ? (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => openGroupModal()}
+                                                  className="rounded-full bg-violet-600 px-2 py-0.5 text-[10px] font-semibold text-white transition hover:bg-violet-700"
+                                                >
+                                                  Agrupar ({billSelectedItemIds.length})
+                                                </button>
+                                              ) : billSelectedItemIds.length > 0 ? (
+                                                <button
+                                                  type="button"
+                                                  onClick={clearTransactionSelection}
+                                                  className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600 transition hover:bg-slate-50"
+                                                >
+                                                  Limpar ({billSelectedItemIds.length})
+                                                </button>
+                                              ) : null}
                                             </div>
                                           </th>
+                                          {salaryCalendarMonths.map((monthItem) => (
+                                            <td
+                                              key={`${row.id}-header-${monthItem.monthValue}`}
+                                              className={`border border-slate-200 bg-violet-50 p-1 ${
+                                                monthItem.monthValue === selectedMonth ? "ring-1 ring-sky-200" : ""
+                                              }`}
+                                            >
+                                              <div className="flex min-h-[54px] items-center rounded-[16px] bg-violet-100/50 px-2 text-[10px] font-semibold text-violet-400">
+                                                -
+                                              </div>
+                                            </td>
+                                          ))}
+                                          <td className="border border-slate-200 bg-violet-50 px-2 py-2.5 text-right">
+                                            <p className="text-[11px] font-semibold text-violet-400">-</p>
+                                          </td>
+                                        </tr>,
+                                        ...itemRows.map((item) => {
+                                          const isItemSelected = selectedTransactionIds.includes(item.id);
+                                          const itemTransaction = transactions.find((t) => t.id === item.id);
+                                          const itemGroup = itemTransaction?.groupId ? transactionGroups.find((g) => g.id === itemTransaction.groupId) : null;
+
+                                          return (
+                                            <tr key={`${row.id}-${item.id}`} className="align-top">
+                                              <th className="sticky left-0 z-20 w-[180px] border border-slate-200 bg-white px-2 py-2.5 text-left">
+                                                <div className={`rounded-xl px-1 py-1 ${isItemSelected ? "bg-violet-50" : ""}`}>
+                                                  <div className="flex items-start gap-2">
+                                                    <input
+                                                      type="checkbox"
+                                                      checked={isItemSelected}
+                                                      onChange={() => toggleTransactionSelection(item.id)}
+                                                      className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                                                    />
+                                                    <div>
+                                                      <p className="text-xs font-semibold text-slate-900">{item.title}</p>
+                                                      {itemGroup && (
+                                                        <span className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-medium text-violet-700">
+                                                          📦 {itemGroup.nome}
+                                                        </span>
+                                                      )}
+                                                      <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">
+                                                        {item.support}
+                                                      </p>
+                                                    </div>
+                                                  </div>
+                                                </div>
+                                              </th>
                                           {salaryCalendarMonths.map((monthItem) => {
                                             const itemAmount = item.amountsByMonth[monthItem.monthValue] ?? 0;
                                             return (
@@ -10556,7 +10620,9 @@ export function FinanceApp() {
                                             </p>
                                           </td>
                                         </tr>
-                                      ));
+                                          );
+                                        }),
+                                      ];
                                     })()
                                   : null}
                                 </Fragment>
