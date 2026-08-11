@@ -2686,8 +2686,8 @@ export function FinanceApp() {
     );
 
     if (purchasesToConvert.length > 0) {
-      const billGroupId = `migrated-${crypto.randomUUID()}`;
       for (const purchase of purchasesToConvert) {
+        const billGroupId = `migrated-${purchase.id}`;
         const targetMonth = purchase.targetMonth ?? purchase.desiredDate?.slice(0, 7) ?? getTodayMonthValue();
         const installments = Math.max(1, purchase.plannedInstallments ?? 1);
         const installmentValue = Number((purchase.estimatedValue / installments).toFixed(2));
@@ -7171,11 +7171,26 @@ export function FinanceApp() {
     installmentTotal?: number;
   };
 
+  function getBillStatementGroupId(bill: Bill) {
+    return bill.recurringGroupId ?? (bill.isRecurring ? bill.id : bill.id);
+  }
+
+  function getBillStatementSupportLabel(bill: Bill) {
+    if ((bill.installments ?? 1) > 1) {
+      return `Conta - Parcelado ${bill.installments}x`;
+    }
+
+    return bill.isRecurring ? "Conta recorrente" : "Conta";
+  }
+
   function getCardStatementGridItems(cardId: string, statementMonth: string): CardStatementGridItem[] {
     const card = cards.find((item) => item.id === cardId);
     if (!card) {
       return [];
     }
+
+    const getSourceBillGroupId = (bill: Bill | undefined) =>
+      bill ? bill.recurringGroupId ?? (bill.isRecurring ? bill.id : undefined) : undefined;
 
     const transactionItems = transactions
       .filter(
@@ -7193,8 +7208,11 @@ export function FinanceApp() {
           : sourceBill
             ? "Conta"
             : "Transacao";
+        const sourceBillGroupId = getSourceBillGroupId(sourceBill);
+        const sourceBillGroupKey = sourceBillGroupId ? `source-bill-${sourceBillGroupId}` : undefined;
         const installmentKey =
           transaction.installmentGroupId ??
+          sourceBillGroupKey ??
           (transaction.installmentTotal
             ? `${transaction.title}-${transaction.installmentTotal}-${transaction.cardId ?? cardId}`
             : undefined);
@@ -7203,14 +7221,18 @@ export function FinanceApp() {
           : baseSourceLabel;
 
         return {
-          id: installmentKey ? `installment-${installmentKey}` : `transaction-${transaction.id}`,
+          id: sourceBillGroupId
+            ? `bill-${sourceBillGroupId}`
+            : installmentKey
+              ? `installment-${installmentKey}`
+              : `transaction-${transaction.id}`,
           title: transaction.title,
           amount: getCreditCardTransactionSignedAmount(transaction),
           support: transaction.type === "income" ? `${sourceLabel} - Credito/estorno` : sourceLabel,
           sortKey: `${transaction.date}-${String(index).padStart(4, "0")}`,
           sourceType: "transaction" as const,
           sourceId: transaction.id,
-          installmentGroupId: transaction.installmentGroupId ?? installmentKey,
+          installmentGroupId: transaction.installmentGroupId ?? sourceBillGroupKey ?? installmentKey,
           installmentTotal: transaction.installmentTotal,
         };
       });
@@ -7237,13 +7259,13 @@ export function FinanceApp() {
           getCardStatementMonthForBill(card, bill) === statementMonth,
       )
       .map((bill, index) => ({
-        id: `bill-${bill.id}`,
+        id: `bill-${getBillStatementGroupId(bill)}`,
         title: bill.title,
         amount: bill.amount,
-        support: bill.isRecurring ? "Conta recorrente" : "Conta",
+        support: getBillStatementSupportLabel(bill),
         sortKey: `${bill.dueDate}-${String(index).padStart(4, "0")}`,
         sourceType: "bill" as const,
-        sourceId: bill.recurringGroupId ?? bill.id,
+        sourceId: getBillStatementGroupId(bill),
       }));
 
     const plannedPurchaseItems = plannedPurchases
@@ -7275,6 +7297,84 @@ export function FinanceApp() {
     return [...transactionItems, ...billItems, ...plannedPurchaseItems].sort((left, right) => left.sortKey.localeCompare(right.sortKey));
   }
 
+  function updateCreditLinkedBillGroupMonth(
+    cardId: string,
+    groupId: string,
+    statementMonth: string,
+    nextAmount: number,
+  ) {
+    const card = cards.find((current) => current.id === cardId);
+    if (!card) {
+      return;
+    }
+
+    setBills((current) => {
+      const groupBills = current
+        .filter((bill) => getBillStatementGroupId(bill) === groupId)
+        .sort((left, right) => left.dueDate.localeCompare(right.dueDate));
+      const baseBill = groupBills[0];
+      if (!baseBill || !isCreditLinkedBill(baseBill)) {
+        return current;
+      }
+
+      const targetBill = groupBills.find(
+        (bill) => isCreditLinkedBill(bill) && getCardStatementMonthForBill(card, bill) === statementMonth,
+      );
+
+      if (targetBill) {
+        return current.map((bill) => (bill.id === targetBill.id ? { ...bill, amount: nextAmount } : bill));
+      }
+
+      if (nextAmount <= 0) {
+        return current;
+      }
+
+      const dueDay = (baseBill.recurringDay ?? Number(baseBill.dueDate.slice(8, 10))) || card.dueDay || 1;
+      const nextBill: Bill = {
+        ...baseBill,
+        id: `bill-${crypto.randomUUID()}`,
+        amount: nextAmount,
+        dueDate: alignDateToDay(`${statementMonth}-01`, dueDay),
+        status: "pending",
+        recurringGroupId: groupId,
+        plannedPaymentMethod: "card",
+        plannedCardId: cardId,
+        plannedCardMode: "credit",
+      };
+
+      return [...current, nextBill].sort((left, right) => left.dueDate.localeCompare(right.dueDate));
+    });
+  }
+
+  function updateCreditLinkedBillGroupTransactionsMonth(
+    cardId: string,
+    groupId: string,
+    statementMonth: string,
+    nextAmount: number,
+  ) {
+    const card = cards.find((current) => current.id === cardId);
+    if (!card) {
+      return;
+    }
+
+    setTransactions((current) =>
+      current.map((transaction) => {
+        const sourceBill = transaction.sourceBillId
+          ? bills.find((bill) => bill.id === transaction.sourceBillId)
+          : undefined;
+        const sourceBillGroupId = sourceBill ? getBillStatementGroupId(sourceBill) : undefined;
+        const transactionStatementMonth =
+          transaction.cardId === cardId && transaction.cardMode === "credit"
+            ? getCardStatementMonthForTransaction(card, transaction)
+            : "";
+
+        return sourceBillGroupId === groupId && transactionStatementMonth === statementMonth
+          ? { ...transaction, amount: nextAmount }
+          : transaction;
+      }),
+    );
+  }
+
   function handleCardStatementGridItemAmountChange(
     cardId: string,
     item: CardStatementGridItem,
@@ -7290,12 +7390,34 @@ export function FinanceApp() {
     const nextAmount = Math.max(0, Number(parsedValue.toFixed(2)));
 
     if (item.sourceType === "transaction") {
+      const sourceBillGroupPrefix = "source-bill-";
+      if (item.installmentGroupId?.startsWith(sourceBillGroupPrefix)) {
+        const groupId = item.installmentGroupId.slice(sourceBillGroupPrefix.length);
+        updateCreditLinkedBillGroupMonth(
+          cardId,
+          groupId,
+          statementMonth,
+          nextAmount,
+        );
+        updateCreditLinkedBillGroupTransactionsMonth(cardId, groupId, statementMonth, nextAmount);
+        return;
+      }
+
       setTransactions((current) => {
-        const getTransactionInstallmentKey = (transaction: Transaction) =>
-          transaction.installmentGroupId ??
-          (transaction.installmentTotal
-            ? `${transaction.title}-${transaction.installmentTotal}-${transaction.cardId ?? cardId}`
-            : undefined);
+        const getTransactionInstallmentKey = (transaction: Transaction) => {
+          const sourceBill = transaction.sourceBillId
+            ? bills.find((bill) => bill.id === transaction.sourceBillId)
+            : undefined;
+          const sourceBillGroupId = sourceBill?.recurringGroupId ?? (sourceBill?.isRecurring ? sourceBill.id : undefined);
+
+          return (
+            transaction.installmentGroupId ??
+            (sourceBillGroupId ? `source-bill-${sourceBillGroupId}` : undefined) ??
+            (transaction.installmentTotal
+              ? `${transaction.title}-${transaction.installmentTotal}-${transaction.cardId ?? cardId}`
+              : undefined)
+          );
+        };
 
         if (item.installmentGroupId) {
           const groupTransactions = current.filter(
@@ -7381,17 +7503,7 @@ export function FinanceApp() {
       return;
     }
 
-    setBills((current) =>
-      current.map((bill) => {
-        const billStatementMonth =
-          isCreditLinkedBill(bill) && bill.plannedCardId === cardId
-            ? getCardStatementMonthForBill(card, bill)
-            : "";
-        const isTargetBill = bill.recurringGroupId ? bill.recurringGroupId === item.sourceId : bill.id === item.sourceId;
-
-        return isTargetBill && billStatementMonth === statementMonth ? { ...bill, amount: nextAmount } : bill;
-      }),
-    );
+    updateCreditLinkedBillGroupMonth(cardId, item.sourceId, statementMonth, nextAmount);
   }
 
   function createMonthlyGridRows(): MonthlyGridRow[] {

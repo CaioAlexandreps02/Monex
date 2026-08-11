@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 
+import { loadRelationalFinanceState } from "@/lib/monex-relational-state";
+
 const APP_STATE_KEY = "default";
 const SUPABASE_REQUEST_TIMEOUT_MS = 12000;
+const APP_STATE_SOURCE = process.env.MONEX_APP_STATE_SOURCE ?? "json";
 
 function getSupabaseConfig() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -22,6 +25,10 @@ function getSupabaseRequestSignal() {
   return AbortSignal.timeout(SUPABASE_REQUEST_TIMEOUT_MS);
 }
 
+function shouldReadRelationalState() {
+  return APP_STATE_SOURCE.toLowerCase() === "relational";
+}
+
 export async function GET() {
   try {
     const config = getSupabaseConfig();
@@ -31,6 +38,11 @@ export async function GET() {
         { error: "Supabase environment variables are not configured." },
         { status: 503 },
       );
+    }
+
+    if (shouldReadRelationalState()) {
+      const payload = await loadRelationalFinanceState(config, getSupabaseRequestSignal());
+      return NextResponse.json({ ...payload, source: "relational" });
     }
 
     const response = await fetch(
@@ -54,7 +66,7 @@ export async function GET() {
     }
 
     const rows = (await response.json()) as Array<{ state: unknown; updated_at: string }>;
-    return NextResponse.json({ state: rows[0]?.state ?? null, updatedAt: rows[0]?.updated_at ?? null });
+    return NextResponse.json({ state: rows[0]?.state ?? null, updatedAt: rows[0]?.updated_at ?? null, source: "json" });
   } catch (error) {
     return NextResponse.json(
       { error: "Unexpected app-state GET failure.", details: getErrorMessage(error) },
