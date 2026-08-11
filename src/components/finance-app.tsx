@@ -3047,7 +3047,7 @@ export function FinanceApp() {
   }
 
   function getCardBillAutoEstimatedAmount(cardId: string, monthValue: string) {
-    return plannedPurchases
+    const plannedPurchaseTotal = plannedPurchases
       .filter(
         (purchase) =>
           purchase.status !== "cancelled" &&
@@ -3058,6 +3058,21 @@ export function FinanceApp() {
           (purchase.plannedCardMode ?? "credit") === "credit",
       )
       .reduce((sum, purchase) => sum + (getPlannedPurchaseAmountByMonth(purchase)[monthValue] ?? 0), 0);
+
+    const card = cards.find((c) => c.id === cardId);
+    const linkedBillsTotal = card
+      ? bills
+          .filter(
+            (bill) =>
+              isCreditLinkedBill(bill) &&
+              bill.plannedCardId === cardId &&
+              bill.status !== "paid" &&
+              getCardStatementMonthForBill(card, bill) === monthValue,
+          )
+          .reduce((sum, bill) => sum + bill.amount, 0)
+      : 0;
+
+    return plannedPurchaseTotal + linkedBillsTotal;
   }
 
   function getCardBillGridAmount(cardId: string, monthValue: string) {
