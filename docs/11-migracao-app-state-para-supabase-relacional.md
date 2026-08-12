@@ -368,8 +368,11 @@ Implementacao atual:
 - O `PUT /api/app-state` continua salvando no JSON quando `MONEX_APP_STATE_SOURCE=json`.
 - Quando `MONEX_APP_STATE_SOURCE=relational`, o `PUT /api/app-state` sincroniza o snapshot recebido para as tabelas `monex_*`.
 - A sincronizacao apaga as linhas de `owner_key = 'default'` nas tabelas relacionais e reinsere o estado completo em ordem de dependencia.
+- Antes de apagar qualquer tabela, o servidor compara o snapshot recebido com o `app_state` de backup e rejeita gravacoes que parecam incompletas.
 
 Essa abordagem e adequada para a fase atual porque o volume de dados e pequeno e reduz risco de divergencia. No futuro, pode ser refinada para endpoints incrementais por operacao.
+
+Incidente observado em 2026-08-12: a auditoria mostrou tabelas relacionais quase vazias (`cards = 0`, `bills = 1`) enquanto o JSON continuava completo. A recuperacao correta e rodar novamente `supabase/manual-fixes/20260811_backfill_monex_relational_from_app_state.sql` e depois a auditoria.
 
 ### Fase 7 - Dual-write temporario
 

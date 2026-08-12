@@ -107,6 +107,21 @@ async function fetchAppStateMeta(config: SupabaseRestConfig, signal: AbortSignal
   };
 }
 
+async function fetchBackupAppState(config: SupabaseRestConfig, signal: AbortSignal) {
+  const response = await fetch(`${config.url}/rest/v1/app_state?select=state&key=eq.${OWNER_KEY}&limit=1`, {
+    headers: restHeaders(config),
+    cache: "no-store",
+    signal,
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const rows = (await response.json()) as Array<{ state?: JsonObject }>;
+  return rows[0]?.state ?? null;
+}
+
 function mapAccount(row: JsonObject) {
   return omitUndefined({
     id: asString(row.id),
@@ -1072,8 +1087,92 @@ function dedupeRows(rows: JsonObject[]) {
   return Array.from(new Map(rows.map((row) => [asString(row.id), row])).values());
 }
 
+function collectionCount(state: JsonObject | null, key: string) {
+  if (!state) {
+    return 0;
+  }
+
+  const value = state[key];
+  if (Array.isArray(value)) {
+    return value.length;
+  }
+
+  if (value && typeof value === "object") {
+    return Object.keys(value).length;
+  }
+
+  return 0;
+}
+
+function validateSnapshotAgainstBackup(state: JsonObject, backupState: JsonObject | null) {
+  const requiredArrayKeys = [
+    "accounts",
+    "cards",
+    "transactions",
+    "bills",
+    "categories",
+    "debts",
+    "fixedEntries",
+    "plannedPurchases",
+    "investments",
+    "importedStatementBatches",
+    "importedStatementItems",
+    "importLearningRules",
+    "importMerchants",
+    "importAutomationConfigs",
+  ];
+
+  const missingKeys = requiredArrayKeys.filter((key) => !Array.isArray(state[key]));
+  if (missingKeys.length) {
+    throw new Error(`Relational snapshot is missing required collections: ${missingKeys.join(", ")}`);
+  }
+
+  if (!state.cardBillEstimates || typeof state.cardBillEstimates !== "object" || Array.isArray(state.cardBillEstimates)) {
+    throw new Error("Relational snapshot is missing cardBillEstimates.");
+  }
+
+  if (!state.monthlyPlansByMonth || typeof state.monthlyPlansByMonth !== "object" || Array.isArray(state.monthlyPlansByMonth)) {
+    throw new Error("Relational snapshot is missing monthlyPlansByMonth.");
+  }
+
+  if (!backupState) {
+    return;
+  }
+
+  const protectedKeys = [
+    "accounts",
+    "cards",
+    "transactions",
+    "bills",
+    "fixedEntries",
+    "debts",
+    "plannedPurchases",
+    "importedStatementItems",
+    "cardBillEstimates",
+    "monthlyPlansByMonth",
+  ];
+  const dangerousDrops = protectedKeys
+    .map((key) => ({
+      key,
+      backupCount: collectionCount(backupState, key),
+      incomingCount: collectionCount(state, key),
+    }))
+    .filter(({ backupCount, incomingCount }) => backupCount >= 3 && incomingCount < Math.floor(backupCount * 0.7));
+
+  if (dangerousDrops.length) {
+    throw new Error(
+      `Relational snapshot rejected because it looks incomplete: ${dangerousDrops
+        .map(({ key, backupCount, incomingCount }) => `${key} ${incomingCount}/${backupCount}`)
+        .join(", ")}`,
+    );
+  }
+}
+
 export async function saveRelationalFinanceState(config: SupabaseRestConfig, stateValue: unknown, signal: AbortSignal) {
   const state = asObject(stateValue);
+  const backupState = await fetchBackupAppState(config, signal);
+  validateSnapshotAgainstBackup(state, backupState);
+
   const investments = asJsonArray(state.investments);
   const monthlyPlansByMonth = asObject(state.monthlyPlansByMonth);
   const categoryRows = dedupeRows([
