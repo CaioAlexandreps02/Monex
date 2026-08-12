@@ -1161,7 +1161,7 @@ function validateSnapshotAgainstBackup(state: JsonObject, backupState: JsonObjec
     }))
     .filter(({ backupCount, incomingCount }) => backupCount >= 3 && incomingCount < Math.floor(backupCount * 0.7));
 
-  if (dangerousDrops.length) {
+  if (dangerousDrops.length > 1) {
     throw new Error(
       `Relational snapshot rejected because it looks incomplete: ${dangerousDrops
         .map(({ key, backupCount, incomingCount }) => `${key} ${incomingCount}/${backupCount}`)

@@ -810,6 +810,14 @@ function getContasSubType(row: MonthlyGridRow): ContasSubType {
   return "Contas fixas";
 }
 
+function formatMoneyInputValue(value: number) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "";
+  }
+
+  return Number(value.toFixed(2)).toString();
+}
+
 function normalizeImportedDescription(value: string) {
   return value
     .normalize("NFD")
@@ -2725,11 +2733,11 @@ export function FinanceApp() {
       );
     }
 
-    if (migratedBills.length > 0) setBills(migratedBills);
+    if (persisted.bills || migratedBills.length > 0) setBills(migratedBills);
     if (persisted.categories) setCategories(persisted.categories);
     if (persisted.debts) setDebts(persisted.debts);
     if (persisted.fixedEntries) setFixedEntries(persisted.fixedEntries);
-    if (migratedPlannedPurchases.length > 0) setPlannedPurchases(migratedPlannedPurchases);
+    if (persisted.plannedPurchases) setPlannedPurchases(migratedPlannedPurchases);
     if (persisted.investments) setInvestments(persisted.investments);
     if (persisted.cardBillEstimates) setCardBillEstimates(persisted.cardBillEstimates);
     if (persisted.importedStatementBatches) setImportedStatementBatches(persisted.importedStatementBatches);
@@ -5589,8 +5597,8 @@ export function FinanceApp() {
       kind: row.section === "Ganhos" ? "income" : "expense",
       schedule: "once",
       categoryId: row.categoryId,
-      totalAmount: amount > 0 ? String(amount) : "",
-      installmentAmount: amount > 0 ? String(amount) : "",
+      totalAmount: formatMoneyInputValue(amount),
+      installmentAmount: formatMoneyInputValue(amount),
       installments: "1",
       startDate: `${monthValue}-01`,
       paymentMethod:
@@ -10606,7 +10614,7 @@ export function FinanceApp() {
                                             } ${selectedMonthCellClass}`}
                                           >
                                             <input
-                                              value={amount > 0 ? String(amount) : ""}
+                                              value={formatMoneyInputValue(amount)}
                                               onClick={(event) => event.stopPropagation()}
                                               onFocus={(event) => event.stopPropagation()}
                                               onChange={(event) =>
@@ -10639,7 +10647,7 @@ export function FinanceApp() {
                                             } ${selectedMonthCellClass}`}
                                           >
                                             <input
-                                              value={amount > 0 ? String(amount) : ""}
+                                              value={formatMoneyInputValue(amount)}
                                               onClick={(event) => event.stopPropagation()}
                                               onFocus={(event) => event.stopPropagation()}
                                               onChange={(event) =>
@@ -10692,7 +10700,7 @@ export function FinanceApp() {
                                           >
                                             <div className="flex items-start justify-between">
                                               <input
-                                                value={amount > 0 ? String(amount) : ""}
+                                                value={formatMoneyInputValue(amount)}
                                                 onClick={(event) => event.stopPropagation()}
                                                 onFocus={(event) => event.stopPropagation()}
                                                 onChange={(event) =>
@@ -10911,7 +10919,7 @@ export function FinanceApp() {
                                                     </span>
                                                   ) : (
                                                     <input
-                                                      value={itemAmount > 0 ? String(itemAmount) : ""}
+                                                      value={formatMoneyInputValue(itemAmount)}
                                                       onChange={(event) =>
                                                         handleCardStatementGridItemAmountChange(
                                                           row.sourceId,
@@ -12053,7 +12061,7 @@ export function FinanceApp() {
               <div className="flex flex-wrap items-end justify-between gap-3">
                 <FormField label="Valor estimado">
                   <input
-                    value={String(estimatedAmount || "")}
+                    value={formatMoneyInputValue(estimatedAmount)}
                     onChange={(event) => handleUpdateCardBillEstimate(cardId, monthValue, event.target.value)}
                     inputMode="decimal"
                     placeholder="0"
@@ -12831,7 +12839,7 @@ export function FinanceApp() {
                   </FormField>
                   <FormField label="Valor por parcela">
                     <input
-                      value={draftCommitment.installmentAmount || (suggestedInstallment > 0 ? String(suggestedInstallment) : "")}
+                      value={draftCommitment.installmentAmount || formatMoneyInputValue(suggestedInstallment)}
                       onChange={(event) =>
                         setDraftCommitment((current) => ({ ...current, installmentAmount: event.target.value }))
                       }
