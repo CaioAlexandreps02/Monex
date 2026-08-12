@@ -3068,6 +3068,34 @@ export function FinanceApp() {
     return bill?.bill.archivedAt ? 0 : bill?.bill.amount ?? 0;
   }
 
+  function getCreditLinkedBillsForStatement(cardId: string, monthValue: string) {
+    const card = cards.find((item) => item.id === cardId);
+    if (!card) {
+      return [];
+    }
+
+    const transactionBillIds = new Set(
+      transactions
+        .filter(
+          (transaction) =>
+            transaction.type === "expense" &&
+            transaction.cardId === cardId &&
+            transaction.cardMode === "credit" &&
+            transaction.sourceBillId &&
+            getCardStatementMonthForTransaction(card, transaction) === monthValue,
+        )
+        .map((transaction) => transaction.sourceBillId),
+    );
+
+    return bills.filter(
+      (bill) =>
+        isCreditLinkedBill(bill) &&
+        bill.plannedCardId === cardId &&
+        !transactionBillIds.has(bill.id) &&
+        getCardStatementMonthForBill(card, bill) === monthValue,
+    );
+  }
+
   function getCardBillAutoEstimatedAmount(cardId: string, monthValue: string) {
     const plannedPurchaseTotal = plannedPurchases
       .filter(
@@ -3081,18 +3109,10 @@ export function FinanceApp() {
       )
       .reduce((sum, purchase) => sum + (getPlannedPurchaseAmountByMonth(purchase)[monthValue] ?? 0), 0);
 
-    const card = cards.find((c) => c.id === cardId);
-    const linkedBillsTotal = card
-      ? bills
-          .filter(
-            (bill) =>
-              isCreditLinkedBill(bill) &&
-              bill.plannedCardId === cardId &&
-              bill.status !== "paid" &&
-              getCardStatementMonthForBill(card, bill) === monthValue,
-          )
-          .reduce((sum, bill) => sum + bill.amount, 0)
-      : 0;
+    const linkedBillsTotal = getCreditLinkedBillsForStatement(cardId, monthValue).reduce(
+      (sum, bill) => sum + bill.amount,
+      0,
+    );
 
     return plannedPurchaseTotal + linkedBillsTotal;
   }
@@ -7331,27 +7351,7 @@ export function FinanceApp() {
         };
       });
 
-    const transactionBillIds = new Set(
-      transactions
-        .filter(
-          (transaction) =>
-            transaction.type === "expense" &&
-            transaction.cardId === cardId &&
-            transaction.cardMode === "credit" &&
-            transaction.sourceBillId &&
-            getCardStatementMonthForTransaction(card, transaction) === statementMonth,
-        )
-        .map((transaction) => transaction.sourceBillId),
-    );
-
-    const billItems = bills
-      .filter(
-        (bill) =>
-          isCreditLinkedBill(bill) &&
-          bill.plannedCardId === cardId &&
-          !transactionBillIds.has(bill.id) &&
-          getCardStatementMonthForBill(card, bill) === statementMonth,
-      )
+    const billItems = getCreditLinkedBillsForStatement(cardId, statementMonth)
       .map((bill, index) => ({
         id: `bill-${getBillStatementGroupId(bill)}`,
         title: bill.title,
