@@ -407,6 +407,7 @@ create index if not exists idx_monex_transactions_card_month on public.monex_tra
 create index if not exists idx_monex_bills_owner_due_date on public.monex_bills (owner_key, due_date);
 create index if not exists idx_monex_bills_card_due_date on public.monex_bills (owner_key, planned_card_id, planned_card_mode, due_date);
 create index if not exists idx_monex_bills_recurring_group on public.monex_bills (owner_key, recurring_group_id);
+create index if not exists idx_monex_bills_group_id on public.monex_bills (owner_key, group_id) where group_id is not null;
 create index if not exists idx_monex_debts_owner_status on public.monex_debts (owner_key, status);
 create index if not exists idx_monex_fixed_entries_owner_section on public.monex_fixed_flow_entries (owner_key, section);
 create index if not exists idx_monex_import_items_batch on public.monex_imported_statement_items (batch_id);

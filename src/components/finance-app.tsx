@@ -5357,6 +5357,19 @@ export function FinanceApp() {
     return item.sourceType === "bill" && Boolean(getBillByStatementGroupId(item.sourceId));
   }
 
+  function getCardStatementItemGroupId(item: CardStatementGridItem) {
+    if (item.sourceType === "transaction") {
+      return transactions.find((transaction) => transaction.id === item.sourceId)?.groupId;
+    }
+
+    return getBillByStatementGroupId(item.sourceId)?.groupId;
+  }
+
+  function getCardStatementItemGroup(item: CardStatementGridItem) {
+    const groupId = getCardStatementItemGroupId(item);
+    return groupId ? transactionGroups.find((group) => group.id === groupId) : undefined;
+  }
+
   function handleCreateGroup() {
     const groupableTransactionIds = getSelectedGroupableTransactionIds();
     const groupableBillGroupIds = getSelectedGroupableBillGroupIds();
@@ -10775,6 +10788,9 @@ export function FinanceApp() {
                                         return null;
                                       }
 
+                                      const getGroupItems = (itemGroupId: string) =>
+                                        itemRows.filter((currentItem) => getCardStatementItemGroup(currentItem)?.id === itemGroupId);
+
                                       return [
                                         ...itemRows.map((item) => {
                                           const selectableTransactionId =
@@ -10793,6 +10809,29 @@ export function FinanceApp() {
                                             : undefined;
                                           const itemGroupId = itemTransaction?.groupId ?? itemBill?.groupId;
                                           const itemGroup = itemGroupId ? transactionGroups.find((g) => g.id === itemGroupId) : null;
+                                          const groupItems = itemGroup ? getGroupItems(itemGroup.id) : [];
+                                          const isGroupExpanded = itemGroup ? expandedGroupId === itemGroup.id : false;
+                                          const isFirstGroupItem = !itemGroup || groupItems[0]?.id === item.id;
+                                          const isGroupSummary = Boolean(itemGroup && isFirstGroupItem && !isGroupExpanded);
+
+                                          if (itemGroup && !isFirstGroupItem && !isGroupExpanded) {
+                                            return null;
+                                          }
+
+                                          const rowAmountsByMonth = isGroupSummary
+                                            ? (Object.fromEntries(
+                                                salaryCalendarMonths.map((monthItem) => [
+                                                  monthItem.monthValue,
+                                                  groupItems.reduce(
+                                                    (sum, groupItem) => sum + (groupItem.amountsByMonth[monthItem.monthValue] ?? 0),
+                                                    0,
+                                                  ),
+                                                ]),
+                                              ) as Record<string, number>)
+                                            : item.amountsByMonth;
+                                          const rowTotal = isGroupSummary
+                                            ? Object.values(rowAmountsByMonth).reduce((sum, amountValue) => sum + amountValue, 0)
+                                            : item.total;
 
                                           return (
                                             <tr key={`${row.id}-${item.id}`} className="align-top">
@@ -10816,21 +10855,51 @@ export function FinanceApp() {
                                                       <span className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                                                     )}
                                                     <div>
-                                                      <p className="text-xs font-semibold text-slate-900">{item.title}</p>
+                                                      {isGroupSummary && itemGroup ? (
+                                                        <button
+                                                          type="button"
+                                                          onClick={() => setExpandedGroupId(itemGroup.id)}
+                                                          className="flex w-full items-start justify-between gap-2 text-left"
+                                                        >
+                                                          <span>
+                                                            <span className="block text-xs font-semibold text-slate-900">
+                                                              {itemGroup.nome}
+                                                            </span>
+                                                            <span className="mt-1 block text-[10px] uppercase tracking-[0.14em] text-violet-500">
+                                                              {groupItems.length} {groupItems.length === 1 ? "item" : "itens"}
+                                                            </span>
+                                                          </span>
+                                                          <ChevronDown className="h-4 w-4 shrink-0 text-violet-600" />
+                                                        </button>
+                                                      ) : (
+                                                        <div className="flex w-full items-start justify-between gap-2">
+                                                          <p className="text-xs font-semibold text-slate-900">{item.title}</p>
+                                                          {itemGroup && isFirstGroupItem ? (
+                                                            <button
+                                                              type="button"
+                                                              onClick={() => setExpandedGroupId(null)}
+                                                              className="rounded-full bg-violet-50 p-1 text-violet-600 transition hover:bg-violet-100"
+                                                              aria-label="Recolher grupo"
+                                                            >
+                                                              <ChevronUp className="h-3.5 w-3.5" />
+                                                            </button>
+                                                          ) : null}
+                                                        </div>
+                                                      )}
                                                       {itemGroup && (
                                                         <span className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-medium text-violet-700">
                                                           📦 {itemGroup.nome}
                                                         </span>
                                                       )}
                                                       <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">
-                                                        {item.support}
+                                                        {isGroupSummary ? "Grupo de lancamentos" : item.support}
                                                       </p>
                                                     </div>
                                                   </div>
                                                 </div>
                                               </th>
                                           {salaryCalendarMonths.map((monthItem) => {
-                                            const itemAmount = item.amountsByMonth[monthItem.monthValue] ?? 0;
+                                            const itemAmount = rowAmountsByMonth[monthItem.monthValue] ?? 0;
                                             return (
                                               <td
                                                 key={`${row.id}-${item.id}-${monthItem.monthValue}`}
@@ -10847,27 +10916,37 @@ export function FinanceApp() {
                                                         : "bg-rose-50 text-rose-700 hover:bg-rose-100"
                                                   }`}
                                                 >
-                                                  <input
-                                                    value={itemAmount > 0 ? String(itemAmount) : ""}
-                                                    onChange={(event) =>
-                                                      handleCardStatementGridItemAmountChange(
-                                                        row.sourceId,
-                                                        item,
-                                                        monthItem.monthValue,
-                                                        event.target.value,
-                                                      )
-                                                    }
-                                                    inputMode="decimal"
-                                                    placeholder="0"
-                                                    className="w-full bg-transparent text-[11px] font-semibold leading-tight outline-none placeholder:text-current/40"
-                                                  />
+                                                  {isGroupSummary ? (
+                                                    <span className="text-[11px] font-semibold leading-tight">
+                                                      {itemAmount > 0 ? formatCurrency(itemAmount) : "0"}
+                                                    </span>
+                                                  ) : (
+                                                    <input
+                                                      value={itemAmount > 0 ? String(itemAmount) : ""}
+                                                      onChange={(event) =>
+                                                        handleCardStatementGridItemAmountChange(
+                                                          row.sourceId,
+                                                          item,
+                                                          monthItem.monthValue,
+                                                          event.target.value,
+                                                        )
+                                                      }
+                                                      inputMode="decimal"
+                                                      placeholder="0"
+                                                      className="w-full bg-transparent text-[11px] font-semibold leading-tight outline-none placeholder:text-current/40"
+                                                    />
+                                                  )}
                                                   <button
                                                     type="button"
-                                                    onClick={() => openCardDetails(row.sourceId, monthItem.monthValue)}
+                                                    onClick={() =>
+                                                      isGroupSummary && itemGroup
+                                                        ? setExpandedGroupId(itemGroup.id)
+                                                        : openCardDetails(row.sourceId, monthItem.monthValue)
+                                                    }
                                                     disabled={itemAmount === 0}
                                                     className="mt-1 w-fit text-[9px] font-semibold uppercase tracking-[0.12em] transition hover:opacity-75 disabled:cursor-default disabled:opacity-60"
                                                   >
-                                                    {itemAmount !== 0 ? "Abrir" : "Sem valor"}
+                                                    {itemAmount !== 0 ? (isGroupSummary ? "Expandir" : "Abrir") : "Sem valor"}
                                                   </button>
                                                 </div>
                                               </td>
@@ -10875,7 +10954,7 @@ export function FinanceApp() {
                                           })}
                                           <td className="border border-slate-200 bg-white px-2 py-2.5 text-right">
                                             <p className="text-[11px] font-semibold text-slate-900">
-                                              {formatCurrency(item.total)}
+                                              {formatCurrency(rowTotal)}
                                             </p>
                                           </td>
                                         </tr>
@@ -14893,6 +14972,21 @@ export function FinanceApp() {
                       const bill = canSelectBillItem ? getBillByStatementGroupId(item.sourceId) : undefined;
                       const group = bill?.groupId ? transactionGroups.find((currentGroup) => currentGroup.id === bill.groupId) : null;
                       const isSelected = canSelectBillItem && selectedBillGroupIds.includes(item.sourceId);
+                      const groupItems = group
+                        ? selectedCardStatementBillItems.filter(
+                            (currentItem) => getCardStatementItemGroup(currentItem)?.id === group.id,
+                          )
+                        : [];
+                      const isGroupExpanded = group ? expandedGroupId === group.id : false;
+                      const isFirstGroupItem = !group || groupItems[0]?.id === item.id;
+                      const isGroupSummary = Boolean(group && isFirstGroupItem && !isGroupExpanded);
+                      const displayAmount = isGroupSummary
+                        ? groupItems.reduce((sum, groupItem) => sum + groupItem.amount, 0)
+                        : item.amount;
+
+                      if (group && !isFirstGroupItem && !isGroupExpanded) {
+                        return null;
+                      }
 
                       return (
                         <div
@@ -14915,18 +15009,34 @@ export function FinanceApp() {
                               )}
                               <div>
                                 <div className="flex flex-wrap items-center gap-2">
-                                  <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                                  <p className="text-sm font-semibold text-slate-900">
+                                    {isGroupSummary && group ? group.nome : item.title}
+                                  </p>
                                   {group ? (
                                     <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
-                                      Grupo: {group.nome}
+                                      {isGroupSummary
+                                        ? `${groupItems.length} ${groupItems.length === 1 ? "item" : "itens"}`
+                                        : `Grupo: ${group.nome}`}
                                     </span>
                                   ) : null}
+                                  {group && isFirstGroupItem ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setExpandedGroupId(isGroupExpanded ? null : group.id)}
+                                      className="rounded-full bg-violet-50 p-1 text-violet-600 transition hover:bg-violet-100"
+                                      aria-label={isGroupExpanded ? "Recolher grupo" : "Expandir grupo"}
+                                    >
+                                      {isGroupExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                                    </button>
+                                  ) : null}
                                 </div>
-                                <p className="mt-1 text-sm text-slate-500">{item.support}</p>
+                                <p className="mt-1 text-sm text-slate-500">
+                                  {isGroupSummary ? "Grupo de lancamentos da fatura" : item.support}
+                                </p>
                               </div>
                             </div>
                             <div className="text-right">
-                              <p className="text-sm font-semibold text-slate-900">{formatCurrency(item.amount)}</p>
+                              <p className="text-sm font-semibold text-slate-900">{formatCurrency(displayAmount)}</p>
                               <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
                                 Conta vinculada
                               </p>
@@ -14979,9 +15089,9 @@ export function FinanceApp() {
                               </div>
                               <div className="text-right">
                                 <p className="text-sm font-semibold text-slate-900">{formatCurrency(total)}</p>
-                                <p className="mt-0.5 text-xs text-slate-500">
-                                  {isExpanded ? "Recolher" : "Expandir"}
-                                </p>
+                                <span className="mt-1 inline-flex justify-end text-violet-600">
+                                  {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                                </span>
                               </div>
                             </div>
                             {isExpanded && (

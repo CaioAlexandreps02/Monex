@@ -64,14 +64,19 @@ Isso significa que, antes da integração com Supabase, os dados ainda ficam sal
 - `src/lib/mock-data.ts`: seed local
 - `src/lib/finance.ts`: cálculos e agregações
 - `src/types/finance.ts`: contratos de domínio
-- `supabase/schema.sql`: schema inicial para o banco
+- `supabase/migrations/202608110001_monex_relational_v2.sql`: schema relacional atual (`monex_*`)
+- `supabase/manual-fixes/20260811_backfill_monex_relational_from_app_state.sql`: backfill do `app_state`
+- `supabase/manual-fixes/20260811_audit_monex_relational_backfill.sql`: auditoria JSON vs relacional
+- `supabase/manual-fixes/20260812_audit_monex_relational_health.sql`: auditoria de saúde do modelo relacional
 
 ## Preparação para Supabase
 
 1. Crie um projeto no Supabase.
 2. Abra o SQL Editor.
-3. Rode o conteúdo de `supabase/schema.sql`.
-4. Preencha as variáveis em `.env.local`.
+3. Rode o conteúdo de `supabase/migrations/202608110001_monex_relational_v2.sql`.
+4. Se já existir uma linha em `app_state`, rode `supabase/manual-fixes/20260811_backfill_monex_relational_from_app_state.sql`.
+5. Confira o resultado com `supabase/manual-fixes/20260811_audit_monex_relational_backfill.sql` e `supabase/manual-fixes/20260812_audit_monex_relational_health.sql`.
+6. Preencha as variáveis em `.env.local`.
 
 Campos esperados:
 
