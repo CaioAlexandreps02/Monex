@@ -2991,32 +2991,34 @@ export function FinanceApp() {
   const autoCardBills = cards
     .filter((card) => card.availableMode !== "debit")
     .flatMap((card) => {
-      const groupedTransactionAmounts = transactions
+      const transactionMonths = transactions
         .filter((transaction) => transaction.cardId === card.id && transaction.cardMode === "credit")
-        .reduce<Record<string, number>>((accumulator, transaction) => {
-          const monthValue = getCardStatementMonthForTransaction(card, transaction);
-          accumulator[monthValue] =
-            (accumulator[monthValue] ?? 0) + getCreditCardTransactionSignedAmount(transaction);
-          return accumulator;
-        }, {});
-      const groupedBillAmounts = bills
+        .map((transaction) => getCardStatementMonthForTransaction(card, transaction));
+      const billMonths = bills
         .filter(
           (bill) =>
             isCreditLinkedBill(bill) &&
-            bill.plannedCardId === card.id &&
-            bill.status !== "paid",
+            bill.plannedCardId === card.id,
         )
-        .reduce<Record<string, number>>((accumulator, bill) => {
-          const monthValue = getCardStatementMonthForBill(card, bill);
-          accumulator[monthValue] = (accumulator[monthValue] ?? 0) + bill.amount;
-          return accumulator;
-        }, {});
+        .map((bill) => getCardStatementMonthForBill(card, bill));
+      const plannedPurchaseMonths = plannedPurchases
+        .filter(
+          (purchase) =>
+            purchase.planningMode === "card_parcelado" &&
+            purchase.plannedCardId === card.id &&
+            purchase.status !== "cancelled" &&
+            purchase.status !== "bought" &&
+            purchase.estimatedValue > 0,
+        )
+        .flatMap((purchase) =>
+          Object.entries(getPlannedPurchaseAmountByMonth(purchase))
+            .filter(([, amount]) => amount > 0)
+            .map(([monthValue]) => monthValue),
+        );
       const groupedByMonth = Object.fromEntries(
-        Array.from(
-          new Set([...Object.keys(groupedTransactionAmounts), ...Object.keys(groupedBillAmounts)]),
-        ).map((monthValue) => [
+        Array.from(new Set([...transactionMonths, ...billMonths, ...plannedPurchaseMonths])).map((monthValue) => [
           monthValue,
-          (groupedTransactionAmounts[monthValue] ?? 0) + (groupedBillAmounts[monthValue] ?? 0),
+          getCardBillAutoEstimatedAmount(card.id, monthValue),
         ]),
       );
 
@@ -3097,24 +3099,11 @@ export function FinanceApp() {
   }
 
   function getCardBillAutoEstimatedAmount(cardId: string, monthValue: string) {
-    const plannedPurchaseTotal = plannedPurchases
-      .filter(
-        (purchase) =>
-          purchase.status !== "cancelled" &&
-          purchase.status !== "bought" &&
-          !realizedPlannedPurchaseIds.has(purchase.id) &&
-          purchase.plannedPaymentMethod === "card" &&
-          purchase.plannedCardId === cardId &&
-          (purchase.plannedCardMode ?? "credit") === "credit",
-      )
-      .reduce((sum, purchase) => sum + (getPlannedPurchaseAmountByMonth(purchase)[monthValue] ?? 0), 0);
-
-    const linkedBillsTotal = getCreditLinkedBillsForStatement(cardId, monthValue).reduce(
-      (sum, bill) => sum + bill.amount,
-      0,
+    return Number(
+      getCardStatementGridItems(cardId, monthValue)
+        .reduce((sum, item) => sum + item.amount, 0)
+        .toFixed(2),
     );
-
-    return plannedPurchaseTotal + linkedBillsTotal;
   }
 
   function getCardBillGridAmount(cardId: string, monthValue: string) {
