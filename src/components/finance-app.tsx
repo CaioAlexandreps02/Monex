@@ -117,6 +117,7 @@ import {
   Calendar,
   CheckCircle2,
   Check,
+  Tags,
 } from "lucide-react";
 
 const PluggyConnect = dynamic(
@@ -5348,6 +5349,14 @@ export function FinanceApp() {
     return selectedBillGroupIds.filter((id) => billGroupIds.has(id));
   }
 
+  function getBillByStatementGroupId(groupId: string) {
+    return bills.find((bill) => getBillStatementGroupId(bill) === groupId);
+  }
+
+  function isSelectableBillStatementItem(item: CardStatementGridItem) {
+    return item.sourceType === "bill" && Boolean(getBillByStatementGroupId(item.sourceId));
+  }
+
   function handleCreateGroup() {
     const groupableTransactionIds = getSelectedGroupableTransactionIds();
     const groupableBillGroupIds = getSelectedGroupableBillGroupIds();
@@ -10357,6 +10366,26 @@ export function FinanceApp() {
                           </div>
                         </div>
                         <div className="flex flex-wrap items-start gap-2">
+                          {section === "Contas" && (selectedTransactionIds.length > 0 || selectedBillGroupIds.length > 0) ? (
+                            selectedGroupableCount >= 2 ? (
+                              <button
+                                type="button"
+                                onClick={openGroupModal}
+                                className="flex h-9 items-center gap-2 rounded-full bg-violet-600 px-4 text-xs font-semibold text-white transition hover:bg-violet-700"
+                              >
+                                <Tags className="h-4 w-4" />
+                                Agrupar ({selectedGroupableCount})
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={clearTransactionSelection}
+                                className="flex h-9 items-center rounded-full border border-slate-200 bg-white/85 px-4 text-xs font-semibold text-slate-700 transition hover:bg-white"
+                              >
+                                Limpar ({selectedTransactionIds.length + selectedBillGroupIds.length})
+                              </button>
+                            )
+                          ) : null}
                           <button
                             type="button"
                             onClick={() =>
@@ -10750,9 +10779,9 @@ export function FinanceApp() {
                                         ...itemRows.map((item) => {
                                           const selectableTransactionId =
                                             item.sourceType === "transaction" ? item.sourceId : null;
-                                          const selectableBillGroupId = item.sourceType === "bill" ? item.sourceId : null;
+                                          const selectableBillGroupId = isSelectableBillStatementItem(item) ? item.sourceId : null;
                                           const itemBill = selectableBillGroupId
-                                            ? bills.find((bill) => getBillStatementGroupId(bill) === selectableBillGroupId)
+                                            ? getBillByStatementGroupId(selectableBillGroupId)
                                             : undefined;
                                           const isItemSelected = selectableTransactionId
                                             ? selectedTransactionIds.includes(selectableTransactionId)
@@ -14860,9 +14889,10 @@ export function FinanceApp() {
                 {selectedCardStatementItems.length ? (
                   <>
                     {selectedCardStatementBillItems.map((item) => {
-                      const bill = bills.find((currentBill) => getBillStatementGroupId(currentBill) === item.sourceId);
+                      const canSelectBillItem = isSelectableBillStatementItem(item);
+                      const bill = canSelectBillItem ? getBillByStatementGroupId(item.sourceId) : undefined;
                       const group = bill?.groupId ? transactionGroups.find((currentGroup) => currentGroup.id === bill.groupId) : null;
-                      const isSelected = selectedBillGroupIds.includes(item.sourceId);
+                      const isSelected = canSelectBillItem && selectedBillGroupIds.includes(item.sourceId);
 
                       return (
                         <div
@@ -14873,12 +14903,16 @@ export function FinanceApp() {
                         >
                           <div className="flex flex-wrap items-center justify-between gap-3">
                             <div className="flex items-start gap-3">
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={() => toggleBillGroupSelection(item.sourceId)}
-                                className="mt-1 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                              />
+                              {canSelectBillItem ? (
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => toggleBillGroupSelection(item.sourceId)}
+                                  className="mt-1 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                                />
+                              ) : (
+                                <span className="mt-1 h-4 w-4 shrink-0" />
+                              )}
                               <div>
                                 <div className="flex flex-wrap items-center gap-2">
                                   <p className="text-sm font-semibold text-slate-900">{item.title}</p>
