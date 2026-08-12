@@ -66,12 +66,17 @@ function tableUrl(config: SupabaseRestConfig, table: string, query = `select=*&o
   return `${config.url}/rest/v1/${table}?${query}`;
 }
 
+function restHeaders(config: SupabaseRestConfig, extraHeaders?: HeadersInit) {
+  return {
+    apikey: config.serviceRoleKey,
+    Authorization: `Bearer ${config.serviceRoleKey}`,
+    ...extraHeaders,
+  };
+}
+
 async function fetchTable(config: SupabaseRestConfig, table: string, signal: AbortSignal, query?: string) {
   const response = await fetch(tableUrl(config, table, query), {
-    headers: {
-      apikey: config.serviceRoleKey,
-      Authorization: `Bearer ${config.serviceRoleKey}`,
-    },
+    headers: restHeaders(config),
     cache: "no-store",
     signal,
   });
@@ -86,10 +91,7 @@ async function fetchTable(config: SupabaseRestConfig, table: string, signal: Abo
 
 async function fetchAppStateMeta(config: SupabaseRestConfig, signal: AbortSignal) {
   const response = await fetch(`${config.url}/rest/v1/app_state?select=state,updated_at&key=eq.${OWNER_KEY}&limit=1`, {
-    headers: {
-      apikey: config.serviceRoleKey,
-      Authorization: `Bearer ${config.serviceRoleKey}`,
-    },
+    headers: restHeaders(config),
     cache: "no-store",
     signal,
   });
@@ -586,4 +588,548 @@ export async function loadRelationalFinanceState(config: SupabaseRestConfig, sig
     } satisfies RelationalFinanceState,
     updatedAt: meta.updatedAt,
   };
+}
+
+async function deleteOwnerRows(config: SupabaseRestConfig, table: string, signal: AbortSignal) {
+  const response = await fetch(tableUrl(config, table, `owner_key=eq.${OWNER_KEY}`), {
+    method: "DELETE",
+    headers: restHeaders(config),
+    signal,
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`Could not clear ${table}: ${response.status} ${details}`);
+  }
+}
+
+async function insertRows(config: SupabaseRestConfig, table: string, rows: JsonObject[], signal: AbortSignal) {
+  if (!rows.length) {
+    return;
+  }
+
+  const chunkSize = 500;
+  for (let index = 0; index < rows.length; index += chunkSize) {
+    const chunk = rows.slice(index, index + chunkSize);
+    const response = await fetch(`${config.url}/rest/v1/${table}`, {
+      method: "POST",
+      headers: restHeaders(config, {
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      }),
+      body: JSON.stringify(chunk),
+      signal,
+    });
+
+    if (!response.ok) {
+      const details = await response.text();
+      throw new Error(`Could not insert ${table}: ${response.status} ${details}`);
+    }
+  }
+}
+
+function optional(value: unknown) {
+  return value === undefined || value === "" ? null : value;
+}
+
+function ownerRow(row: JsonObject) {
+  return { owner_key: OWNER_KEY, ...row };
+}
+
+function toAccountRow(account: JsonObject) {
+  return ownerRow({
+    id: asString(account.id),
+    name: asString(account.name),
+    type: asString(account.type),
+    initial_balance: asNumber(account.initialBalance),
+    current_balance: asNumber(account.currentBalance),
+    is_active: asBoolean(account.isActive, true),
+  });
+}
+
+function toCardRow(card: JsonObject) {
+  return ownerRow({
+    id: asString(card.id),
+    linked_account_id: optional(card.linkedAccountId),
+    name: asString(card.name),
+    issuer: asString(card.issuer),
+    brand: asString(card.brand),
+    last_digits: asString(card.lastDigits),
+    accent_color: asString(card.accentColor),
+    available_mode: asString(card.availableMode, "credit"),
+    closing_day: asNumber(card.closingDay, 1),
+    due_day: asNumber(card.dueDay, 1),
+    credit_limit: asNumber(card.creditLimit),
+    is_active: asBoolean(card.isActive, true),
+  });
+}
+
+function toCategoryRow(category: JsonObject) {
+  return ownerRow({
+    id: asString(category.id),
+    name: asString(category.name),
+    type: asString(category.type, "expense"),
+    color: asString(category.color, "#94A3B8"),
+    parent_id: optional(category.parentId),
+  });
+}
+
+function buildReferencedCategoryRows(state: JsonObject) {
+  const categories = new Map<string, JsonObject>();
+  const addCategory = (id: unknown, name: unknown, type: unknown) => {
+    const categoryId = asOptionalString(id);
+    if (!categoryId || categories.has(categoryId)) {
+      return;
+    }
+
+    categories.set(
+      categoryId,
+      toCategoryRow({
+        id: categoryId,
+        name: asString(name, categoryId),
+        type: asString(type, "expense") === "income" ? "income" : "expense",
+        color: "#94A3B8",
+      }),
+    );
+  };
+
+  for (const bill of asJsonArray(state.bills)) {
+    addCategory(bill.categoryId, bill.categoryName, "expense");
+  }
+  for (const transaction of asJsonArray(state.transactions)) {
+    addCategory(transaction.categoryId, transaction.categoryName, transaction.type);
+  }
+  for (const entry of asJsonArray(state.fixedEntries)) {
+    addCategory(entry.categoryId, entry.categoryName, entry.kind);
+  }
+
+  return Array.from(categories.values());
+}
+
+function toTransactionGroupRow(group: JsonObject) {
+  return ownerRow({
+    id: asString(group.id),
+    name: asString(group.nome, asString(group.name, "Grupo")),
+    created_at: optional(group.createdAt) ?? new Date().toISOString(),
+  });
+}
+
+function toBillRow(bill: JsonObject) {
+  return ownerRow({
+    id: asString(bill.id),
+    title: asString(bill.title),
+    amount: asNumber(bill.amount),
+    category_id: optional(bill.categoryId),
+    category_name: asString(bill.categoryName),
+    due_date: asString(bill.dueDate),
+    priority: asString(bill.priority),
+    is_recurring: asBoolean(bill.isRecurring),
+    recurring_day: optional(bill.recurringDay),
+    status: asString(bill.status, "pending"),
+    planned_payment_method: optional(bill.plannedPaymentMethod),
+    planned_card_id: optional(bill.plannedCardId),
+    planned_card_mode: optional(bill.plannedCardMode),
+    installments: optional(bill.installments),
+    recurring_group_id: optional(bill.recurringGroupId),
+    notes: optional(bill.notes),
+    archived_at: optional(bill.archivedAt),
+  });
+}
+
+function toPlannedPurchaseRow(purchase: JsonObject) {
+  return ownerRow({
+    id: asString(purchase.id),
+    name: asString(purchase.name),
+    description: optional(purchase.description),
+    estimated_value: asNumber(purchase.estimatedValue),
+    priority: asString(purchase.priority),
+    desired_date: optional(purchase.desiredDate),
+    target_month: optional(purchase.targetMonth),
+    target_week: optional(purchase.targetWeek),
+    schedule_type: optional(purchase.scheduleType),
+    specific_month_target: asBoolean(purchase.specificMonthTarget),
+    board_column: asString(purchase.boardColumn, "later"),
+    saved_amount: asNumber(purchase.savedAmount),
+    suggested_period_amount: asNumber(purchase.suggestedPeriodAmount),
+    planned_amount_by_month: asObject(purchase.plannedAmountByMonth),
+    status: asString(purchase.status, "idea"),
+    planning_mode: optional(purchase.planningMode),
+    planned_payment_method: optional(purchase.plannedPaymentMethod),
+    planned_card_id: optional(purchase.plannedCardId),
+    planned_card_mode: optional(purchase.plannedCardMode),
+    planned_installments: optional(purchase.plannedInstallments),
+    notes: optional(purchase.notes),
+  });
+}
+
+function toTransactionRow(transaction: JsonObject) {
+  return ownerRow({
+    id: asString(transaction.id),
+    title: asString(transaction.title),
+    type: asString(transaction.type, "expense"),
+    amount: asNumber(transaction.amount),
+    date: asString(transaction.date),
+    category_id: optional(transaction.categoryId),
+    category_name: asString(transaction.categoryName),
+    description: optional(transaction.description),
+    account_id: optional(transaction.accountId),
+    payment_method: asString(transaction.paymentMethod, "pix"),
+    status: asString(transaction.status, "planned"),
+    income_kind: optional(transaction.incomeKind),
+    expense_kind: optional(transaction.expenseKind),
+    card_id: optional(transaction.cardId),
+    card_mode: optional(transaction.cardMode),
+    installment_group_id: optional(transaction.installmentGroupId),
+    installment_number: optional(transaction.installmentNumber),
+    installment_total: optional(transaction.installmentTotal),
+    source_bill_id: optional(transaction.sourceBillId),
+    linked_planned_purchase_id: optional(transaction.linkedPlannedPurchaseId),
+    notes: optional(transaction.notes),
+    group_id: optional(transaction.groupId),
+  });
+}
+
+function toDebtRow(debt: JsonObject) {
+  return ownerRow({
+    id: asString(debt.id),
+    name: asString(debt.name),
+    description: optional(debt.description),
+    total_amount: asNumber(debt.totalAmount),
+    paid_amount: asNumber(debt.paidAmount),
+    remaining_amount: asNumber(debt.remainingAmount),
+    total_installments: asNumber(debt.totalInstallments, 1),
+    paid_installments: asNumber(debt.paidInstallments),
+    installment_amount: asNumber(debt.installmentAmount),
+    next_due_date: asString(debt.nextDueDate),
+    priority: asString(debt.priority),
+    status: asString(debt.status, "active"),
+    planned_payment_method: optional(debt.plannedPaymentMethod),
+    planned_card_id: optional(debt.plannedCardId),
+    notes: optional(debt.notes),
+    archived_at: optional(debt.archivedAt),
+  });
+}
+
+function toFixedEntryRow(entry: JsonObject) {
+  return ownerRow({
+    id: asString(entry.id),
+    section: asString(entry.section),
+    title: asString(entry.title),
+    kind: asString(entry.kind, "expense"),
+    category_id: optional(entry.categoryId),
+    category_name: asString(entry.categoryName),
+    amount_by_month: asObject(entry.amountByMonth),
+    completed_months: asArray(entry.completedMonths),
+    payment_method: asString(entry.paymentMethod, "pix"),
+    account_id: optional(entry.accountId),
+    card_id: optional(entry.cardId),
+    card_mode: optional(entry.cardMode),
+    linked_bill_group_id: optional(entry.linkedBillGroupId),
+    linked_debt_id: optional(entry.linkedDebtId),
+    linked_investment_id: optional(entry.linkedInvestmentId),
+    sync_card_limit: entry.syncCardLimit === undefined ? null : asBoolean(entry.syncCardLimit),
+    manual_amount_months: asArray(entry.manualAmountMonths),
+    notes: optional(entry.notes),
+    archived_at: optional(entry.archivedAt),
+  });
+}
+
+function toInvestmentRow(investment: JsonObject) {
+  return ownerRow({
+    id: asString(investment.id),
+    name: asString(investment.name),
+    type: asString(investment.type),
+    objective: optional(investment.objective),
+    total_gross_invested: asNumber(investment.totalGrossInvested),
+    current_manual_value: optional(investment.currentManualValue),
+    notes: optional(investment.notes),
+    monthly_target: asNumber(investment.monthlyTarget),
+    payment_method: optional(investment.paymentMethod),
+    account_id: optional(investment.accountId),
+    card_id: optional(investment.cardId),
+    card_mode: optional(investment.cardMode),
+    planned_amount_by_month: asObject(investment.plannedAmountByMonth),
+  });
+}
+
+function toInvestmentContributionRows(investments: JsonObject[]) {
+  return investments.flatMap((investment) =>
+    asJsonArray(investment.contributions).map((contribution) =>
+      ownerRow({
+        id: asString(contribution.id),
+        investment_id: asString(investment.id),
+        contribution_date: asString(contribution.contributionDate),
+        amount: asNumber(contribution.amount),
+        month_value: optional(contribution.monthValue),
+        source: optional(contribution.source),
+        linked_transaction_id: optional(contribution.linkedTransactionId),
+        payment_method: optional(contribution.paymentMethod),
+        account_id: optional(contribution.accountId),
+        card_id: optional(contribution.cardId),
+        card_mode: optional(contribution.cardMode),
+        notes: optional(contribution.notes),
+      }),
+    ),
+  );
+}
+
+function toCardBillEstimateRows(cardBillEstimates: JsonObject) {
+  return Object.entries(cardBillEstimates).map(([id, estimate]) =>
+    ownerRow({
+      id,
+      card_id: asString(asObject(estimate).cardId),
+      month_value: asString(asObject(estimate).monthValue),
+      estimated_amount: asNumber(asObject(estimate).estimatedAmount),
+      is_auto_estimate: asBoolean(asObject(estimate).isAutoEstimate, true),
+      status: asString(asObject(estimate).status, "pending"),
+      paid_transaction_id: optional(asObject(estimate).paidTransactionId),
+      archived_at: optional(asObject(estimate).archivedAt),
+    }),
+  );
+}
+
+function toImportBatchRow(batch: JsonObject) {
+  return ownerRow({
+    id: asString(batch.id),
+    file_name: asString(batch.fileName),
+    file_type: asString(batch.fileType, "csv"),
+    source_kind: asString(batch.sourceKind, "unknown"),
+    transport: optional(batch.transport),
+    source_institution: optional(batch.sourceInstitution),
+    account_id: optional(batch.accountId),
+    card_id: optional(batch.cardId),
+    external_source_id: optional(batch.externalSourceId),
+    source_label: optional(batch.sourceLabel),
+    imported_at: asString(batch.importedAt, new Date().toISOString()),
+    period_start: optional(batch.periodStart),
+    period_end: optional(batch.periodEnd),
+    status: asString(batch.status, "pending_review"),
+    item_count: asNumber(batch.itemCount),
+    confirmed_count: asNumber(batch.confirmedCount),
+    ignored_count: asNumber(batch.ignoredCount),
+    duplicate_count: asNumber(batch.duplicateCount),
+  });
+}
+
+function toMerchantRow(merchant: JsonObject) {
+  return ownerRow({
+    id: asString(merchant.id),
+    name: asString(merchant.name),
+    aliases: asArray(merchant.aliases),
+    source_kind: asString(merchant.sourceKind, "unknown"),
+    suggested_category_id: optional(merchant.suggestedCategoryId),
+    suggested_transaction_type: optional(merchant.suggestedTransactionType),
+    payment_method: optional(merchant.paymentMethod),
+    suggested_match: Object.keys(asObject(merchant.suggestedMatch)).length ? asObject(merchant.suggestedMatch) : null,
+    support_count: asNumber(merchant.supportCount),
+    mistake_count: asNumber(merchant.mistakeCount),
+    status: asString(merchant.status, "suggested"),
+    created_at: asString(merchant.createdAt, new Date().toISOString()),
+    updated_at: asString(merchant.updatedAt, new Date().toISOString()),
+    last_applied_at: optional(merchant.lastAppliedAt),
+  });
+}
+
+function toLearningRuleRow(rule: JsonObject) {
+  return ownerRow({
+    id: asString(rule.id),
+    pattern: asString(rule.pattern),
+    source_kind: asString(rule.sourceKind, "unknown"),
+    suggested_category_id: optional(rule.suggestedCategoryId),
+    suggested_transaction_type: optional(rule.suggestedTransactionType),
+    payment_method: optional(rule.paymentMethod),
+    suggested_match: Object.keys(asObject(rule.suggestedMatch)).length ? asObject(rule.suggestedMatch) : null,
+    support_count: asNumber(rule.supportCount),
+    mistake_count: asNumber(rule.mistakeCount),
+    status: asString(rule.status, "suggested"),
+    created_at: asString(rule.createdAt, new Date().toISOString()),
+    updated_at: asString(rule.updatedAt, new Date().toISOString()),
+    last_applied_at: optional(rule.lastAppliedAt),
+  });
+}
+
+function toAutomationConfigRow(config: JsonObject) {
+  return ownerRow({
+    id: asString(config.id),
+    transport: asString(config.transport),
+    label: asString(config.label),
+    status: asString(config.status, "planned"),
+    is_enabled: asBoolean(config.isEnabled),
+    provider: optional(config.provider),
+    account_id: optional(config.accountId),
+    card_id: optional(config.cardId),
+    allowed_senders: asArray(config.allowedSenders),
+    keywords: asArray(config.keywords),
+    external_connection_id: optional(config.externalConnectionId),
+    processed_external_ids: asArray(config.processedExternalIds),
+    authorized_at: optional(config.authorizedAt),
+    last_sync_at: optional(config.lastSyncAt),
+    notes: optional(config.notes),
+  });
+}
+
+function toImportItemRow(item: JsonObject) {
+  return ownerRow({
+    id: asString(item.id),
+    batch_id: asString(item.batchId),
+    raw_description: asString(item.rawDescription),
+    review_title: optional(item.reviewTitle),
+    normalized_description: asString(item.normalizedDescription),
+    date: asString(item.date),
+    amount: asNumber(item.amount),
+    direction: asString(item.direction, "outflow"),
+    source_kind: asString(item.sourceKind, "unknown"),
+    transport: optional(item.transport),
+    payment_method: asString(item.paymentMethod, "unknown"),
+    account_id: optional(item.accountId),
+    card_id: optional(item.cardId),
+    external_item_id: optional(item.externalItemId),
+    origin_label: optional(item.originLabel),
+    suggested_category_id: optional(item.suggestedCategoryId),
+    suggested_transaction_type: optional(item.suggestedTransactionType),
+    suggested_match: Object.keys(asObject(item.suggestedMatch)).length ? asObject(item.suggestedMatch) : null,
+    applied_learning_rule_id: optional(item.appliedLearningRuleId),
+    detected_merchant_id: optional(item.detectedMerchantId),
+    statement_month: optional(item.statementMonth),
+    confidence: asNumber(item.confidence),
+    status: asString(item.status, "pending"),
+    confirmed_transaction_id: optional(item.confirmedTransactionId),
+    ignored_reason: optional(item.ignoredReason),
+    fingerprint: asString(item.fingerprint),
+  });
+}
+
+function toMonthlyPlanRows(monthlyPlansByMonth: JsonObject) {
+  return Object.entries(monthlyPlansByMonth).map(([monthValue, planValue]) => {
+    const plan = asObject(planValue);
+    return ownerRow({
+      id: `monthly-plan-${monthValue}`,
+      month_value: monthValue,
+      month_label: asString(plan.monthLabel),
+      fixed_income_planned: asNumber(plan.fixedIncomePlanned),
+      variable_income_planned: asNumber(plan.variableIncomePlanned),
+      fixed_expenses_planned: asNumber(plan.fixedExpensesPlanned),
+      variable_expenses_planned: asNumber(plan.variableExpensesPlanned),
+      debt_target: asNumber(plan.debtTarget),
+      investment_target: asNumber(plan.investmentTarget),
+      extra_income_goal: asNumber(plan.extraIncomeGoal),
+    });
+  });
+}
+
+function toMonthlyBudgetRows(monthlyPlansByMonth: JsonObject) {
+  return Object.entries(monthlyPlansByMonth).flatMap(([monthValue, planValue]) =>
+    asJsonArray(asObject(planValue).categoryBudgets).map((budget) =>
+      ownerRow({
+        id: `monthly-budget-${monthValue}-${asString(budget.id)}`,
+        monthly_plan_id: `monthly-plan-${monthValue}`,
+        budget_key: asString(budget.id),
+        name: asString(budget.name),
+        kind: asString(budget.kind, "expense"),
+        planned: asNumber(budget.planned),
+      }),
+    ),
+  );
+}
+
+function toReserveGoalRows(monthlyPlansByMonth: JsonObject) {
+  return Object.entries(monthlyPlansByMonth).flatMap(([monthValue, planValue]) =>
+    asJsonArray(asObject(planValue).reserveGoals).map((goal) =>
+      ownerRow({
+        id: `monthly-reserve-${monthValue}-${asString(goal.id)}`,
+        monthly_plan_id: `monthly-plan-${monthValue}`,
+        goal_key: asString(goal.id),
+        name: asString(goal.name),
+        target: asNumber(goal.target),
+        current: asNumber(goal.current),
+        deadline: asString(goal.deadline),
+        priority: asString(goal.priority),
+      }),
+    ),
+  );
+}
+
+function toSettingsRow(settings: JsonObject) {
+  return {
+    owner_key: OWNER_KEY,
+    fixed_salary_expected: asNumber(settings.fixedSalaryExpected),
+    monthly_investment_target: asNumber(settings.monthlyInvestmentTarget),
+    monthly_debt_payment_cap: asNumber(settings.monthlyDebtPaymentCap),
+    bank_presets: Array.isArray(settings.bankPresets) ? settings.bankPresets : [],
+    default_account_id: optional(settings.defaultAccountId),
+    default_card_id: optional(settings.defaultCardId),
+    week_start_day: asNumber(settings.weekStartDay, 1),
+    extra_income_goal: asNumber(settings.extraIncomeGoal),
+    default_bill_payment_method: optional(settings.defaultBillPaymentMethod),
+  };
+}
+
+function asJsonArray(value: unknown): JsonObject[] {
+  return Array.isArray(value) ? value.map(asObject).filter((item) => Object.keys(item).length > 0) : [];
+}
+
+function dedupeRows(rows: JsonObject[]) {
+  return Array.from(new Map(rows.map((row) => [asString(row.id), row])).values());
+}
+
+export async function saveRelationalFinanceState(config: SupabaseRestConfig, stateValue: unknown, signal: AbortSignal) {
+  const state = asObject(stateValue);
+  const investments = asJsonArray(state.investments);
+  const monthlyPlansByMonth = asObject(state.monthlyPlansByMonth);
+  const categoryRows = dedupeRows([
+    ...asJsonArray(state.categories).map(toCategoryRow),
+    ...buildReferencedCategoryRows(state),
+  ]).map((row) => ({ ...row, parent_id: null }));
+
+  const deleteOrder = [
+    "monex_settings",
+    "monex_reserve_goals",
+    "monex_monthly_plan_category_budgets",
+    "monex_monthly_plans",
+    "monex_imported_statement_items",
+    "monex_import_automation_configs",
+    "monex_import_learning_rules",
+    "monex_import_merchants",
+    "monex_imported_statement_batches",
+    "monex_card_bill_estimates",
+    "monex_investment_contributions",
+    "monex_fixed_flow_entries",
+    "monex_debts",
+    "monex_transactions",
+    "monex_bills",
+    "monex_planned_purchases",
+    "monex_investments",
+    "monex_transaction_groups",
+    "monex_cards",
+    "monex_categories",
+    "monex_accounts",
+  ];
+
+  for (const table of deleteOrder) {
+    await deleteOwnerRows(config, table, signal);
+  }
+
+  await insertRows(config, "monex_accounts", asJsonArray(state.accounts).map(toAccountRow), signal);
+  await insertRows(config, "monex_cards", asJsonArray(state.cards).map(toCardRow), signal);
+  await insertRows(config, "monex_categories", categoryRows, signal);
+  await insertRows(config, "monex_transaction_groups", asJsonArray(state.transactionGroups).map(toTransactionGroupRow), signal);
+  await insertRows(config, "monex_bills", asJsonArray(state.bills).map(toBillRow), signal);
+  await insertRows(config, "monex_planned_purchases", asJsonArray(state.plannedPurchases).map(toPlannedPurchaseRow), signal);
+  await insertRows(config, "monex_transactions", asJsonArray(state.transactions).map(toTransactionRow), signal);
+  await insertRows(config, "monex_debts", asJsonArray(state.debts).map(toDebtRow), signal);
+  await insertRows(config, "monex_fixed_flow_entries", asJsonArray(state.fixedEntries).map(toFixedEntryRow), signal);
+  await insertRows(config, "monex_investments", investments.map(toInvestmentRow), signal);
+  await insertRows(config, "monex_investment_contributions", toInvestmentContributionRows(investments), signal);
+  await insertRows(config, "monex_card_bill_estimates", toCardBillEstimateRows(asObject(state.cardBillEstimates)), signal);
+  await insertRows(config, "monex_imported_statement_batches", asJsonArray(state.importedStatementBatches).map(toImportBatchRow), signal);
+  await insertRows(config, "monex_import_merchants", asJsonArray(state.importMerchants).map(toMerchantRow), signal);
+  await insertRows(config, "monex_import_learning_rules", asJsonArray(state.importLearningRules).map(toLearningRuleRow), signal);
+  await insertRows(config, "monex_import_automation_configs", asJsonArray(state.importAutomationConfigs).map(toAutomationConfigRow), signal);
+  await insertRows(config, "monex_imported_statement_items", asJsonArray(state.importedStatementItems).map(toImportItemRow), signal);
+  await insertRows(config, "monex_monthly_plans", toMonthlyPlanRows(monthlyPlansByMonth), signal);
+  await insertRows(config, "monex_monthly_plan_category_budgets", toMonthlyBudgetRows(monthlyPlansByMonth), signal);
+  await insertRows(config, "monex_reserve_goals", toReserveGoalRows(monthlyPlansByMonth), signal);
+  await insertRows(config, "monex_settings", [toSettingsRow(asObject(state.settings))], signal);
+
+  return { updatedAt: new Date().toISOString() };
 }

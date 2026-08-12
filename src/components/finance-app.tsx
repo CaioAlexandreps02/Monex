@@ -2989,7 +2989,7 @@ export function FinanceApp() {
   const autoCardBills = cards
     .filter((card) => card.availableMode !== "debit")
     .flatMap((card) => {
-      const groupedByMonth = transactions
+      const groupedTransactionAmounts = transactions
         .filter((transaction) => transaction.cardId === card.id && transaction.cardMode === "credit")
         .reduce<Record<string, number>>((accumulator, transaction) => {
           const monthValue = getCardStatementMonthForTransaction(card, transaction);
@@ -2997,6 +2997,26 @@ export function FinanceApp() {
             (accumulator[monthValue] ?? 0) + getCreditCardTransactionSignedAmount(transaction);
           return accumulator;
         }, {});
+      const groupedBillAmounts = bills
+        .filter(
+          (bill) =>
+            isCreditLinkedBill(bill) &&
+            bill.plannedCardId === card.id &&
+            bill.status !== "paid",
+        )
+        .reduce<Record<string, number>>((accumulator, bill) => {
+          const monthValue = getCardStatementMonthForBill(card, bill);
+          accumulator[monthValue] = (accumulator[monthValue] ?? 0) + bill.amount;
+          return accumulator;
+        }, {});
+      const groupedByMonth = Object.fromEntries(
+        Array.from(
+          new Set([...Object.keys(groupedTransactionAmounts), ...Object.keys(groupedBillAmounts)]),
+        ).map((monthValue) => [
+          monthValue,
+          (groupedTransactionAmounts[monthValue] ?? 0) + (groupedBillAmounts[monthValue] ?? 0),
+        ]),
+      );
 
       return Object.entries(groupedByMonth)
         .filter(([, amount]) => amount > 0)
@@ -3582,6 +3602,13 @@ export function FinanceApp() {
               .map((transaction) =>
                 getCardStatementMonthForTransaction(selectedCardDetail, transaction),
               ),
+            ...bills
+              .filter(
+                (bill) =>
+                  isCreditLinkedBill(bill) &&
+                  bill.plannedCardId === selectedCardDetail.id,
+              )
+              .map((bill) => getCardStatementMonthForBill(selectedCardDetail, bill)),
           ],
         ),
       ).sort((left, right) => left.localeCompare(right))
@@ -3596,11 +3623,15 @@ export function FinanceApp() {
         )
         .sort((left, right) => left.date.localeCompare(right.date))
     : [];
+  const selectedCardStatementItems = selectedCardDetail
+    ? getCardStatementGridItems(selectedCardDetail.id, selectedCardStatementMonth)
+    : [];
+  const selectedCardStatementBillItems = selectedCardStatementItems.filter((item) => item.sourceType === "bill");
   const selectedCardStatementInstallments = selectedCardStatementTransactions.filter(
     (transaction) => (transaction.installmentTotal ?? 1) > 1,
   );
-  const selectedCardStatementTotal = selectedCardStatementTransactions.reduce(
-    (sum, transaction) => sum + getCreditCardTransactionSignedAmount(transaction),
+  const selectedCardStatementTotal = selectedCardStatementItems.reduce(
+    (sum, item) => sum + item.amount,
     0,
   );
   const selectedCardLimitSnapshot = selectedCardDetail
@@ -5302,14 +5333,21 @@ export function FinanceApp() {
   // Transaction Groups
   // ============================================================
 
+  function getSelectedGroupableTransactionIds() {
+    const transactionIds = new Set(transactions.map((transaction) => transaction.id));
+    return selectedTransactionIds.filter((id) => transactionIds.has(id));
+  }
+
   function handleCreateGroup() {
-    if (!draftGroupName.trim() || selectedTransactionIds.length < 2) {
+    const groupableTransactionIds = getSelectedGroupableTransactionIds();
+
+    if (!draftGroupName.trim() || groupableTransactionIds.length < 2) {
       return;
     }
 
     const { group, updatedTransactions } = createTransactionGroup(
       draftGroupName,
-      selectedTransactionIds,
+      groupableTransactionIds,
       transactions,
       transactionGroups,
     );
@@ -5359,11 +5397,13 @@ export function FinanceApp() {
   }
 
   function openGroupModal() {
-    if (selectedTransactionIds.length < 2) {
+    const groupableTransactionIds = getSelectedGroupableTransactionIds();
+
+    if (groupableTransactionIds.length < 2) {
       return;
     }
 
-    const firstTransaction = transactions.find((t) => t.id === selectedTransactionIds[0]);
+    const firstTransaction = transactions.find((t) => t.id === groupableTransactionIds[0]);
     setDraftGroupName(firstTransaction?.title ?? "");
     setIsGroupModalOpen(true);
   }
@@ -5387,6 +5427,7 @@ export function FinanceApp() {
   }
 
   const enrichedGroups = getTransactionGroups(transactionGroups, transactions);
+  const selectedGroupableTransactionIds = getSelectedGroupableTransactionIds();
 
   function handleSaveCardBalance(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -10674,14 +10715,16 @@ export function FinanceApp() {
                                         return null;
                                       }
 
-                                      const billSelectedItemIds = itemRows
-                                        .filter((item) => selectedTransactionIds.includes(item.id))
-                                        .map((item) => item.id);
-
                                       return [
                                         ...itemRows.map((item) => {
-                                          const isItemSelected = selectedTransactionIds.includes(item.id);
-                                          const itemTransaction = transactions.find((t) => t.id === item.id);
+                                          const selectableTransactionId =
+                                            item.sourceType === "transaction" ? item.sourceId : null;
+                                          const isItemSelected = selectableTransactionId
+                                            ? selectedTransactionIds.includes(selectableTransactionId)
+                                            : false;
+                                          const itemTransaction = selectableTransactionId
+                                            ? transactions.find((t) => t.id === selectableTransactionId)
+                                            : undefined;
                                           const itemGroup = itemTransaction?.groupId ? transactionGroups.find((g) => g.id === itemTransaction.groupId) : null;
 
                                           return (
@@ -10689,12 +10732,16 @@ export function FinanceApp() {
                                               <th className="sticky left-0 z-20 w-[180px] border border-slate-200 bg-white px-2 py-2.5 text-left">
                                                 <div className={`rounded-xl px-1 py-1 ${isItemSelected ? "bg-violet-50" : ""}`}>
                                                   <div className="flex items-start gap-2">
-                                                    <input
-                                                      type="checkbox"
-                                                      checked={isItemSelected}
-                                                      onChange={() => toggleTransactionSelection(item.id)}
-                                                      className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                                                    />
+                                                    {selectableTransactionId ? (
+                                                      <input
+                                                        type="checkbox"
+                                                        checked={isItemSelected}
+                                                        onChange={() => toggleTransactionSelection(selectableTransactionId)}
+                                                        className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                                                      />
+                                                    ) : (
+                                                      <span className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                                    )}
                                                     <div>
                                                       <p className="text-xs font-semibold text-slate-900">{item.title}</p>
                                                       {itemGroup && (
@@ -10867,7 +10914,7 @@ export function FinanceApp() {
                       <button
                         type="button"
                         onClick={openGroupModal}
-                        disabled={selectedTransactionIds.length < 2}
+                        disabled={selectedGroupableTransactionIds.length < 2}
                         className="rounded-full bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:opacity-50"
                       >
                         Agrupar
@@ -11296,13 +11343,13 @@ export function FinanceApp() {
                   />
                 </FormField>
 
-                {!editingGroupId && selectedTransactionIds.length > 0 && (
+                {!editingGroupId && selectedGroupableTransactionIds.length > 0 && (
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                     <p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">
-                      Transacoes selecionadas ({selectedTransactionIds.length})
+                      Transacoes selecionadas ({selectedGroupableTransactionIds.length})
                     </p>
                     <div className="mt-2 space-y-1">
-                      {selectedTransactionIds.slice(0, 5).map((id) => {
+                      {selectedGroupableTransactionIds.slice(0, 5).map((id) => {
                         const t = transactions.find((tx) => tx.id === id);
                         return t ? (
                           <p key={id} className="text-sm text-slate-700">
@@ -11310,15 +11357,15 @@ export function FinanceApp() {
                           </p>
                         ) : null;
                       })}
-                      {selectedTransactionIds.length > 5 && (
+                      {selectedGroupableTransactionIds.length > 5 && (
                         <p className="text-xs text-slate-500">
-                          ...e mais {selectedTransactionIds.length - 5}
+                          ...e mais {selectedGroupableTransactionIds.length - 5}
                         </p>
                       )}
                     </div>
                     <p className="mt-2 text-xs text-slate-500">
                       Total: {formatCurrency(
-                        selectedTransactionIds.reduce((sum, id) => {
+                        selectedGroupableTransactionIds.reduce((sum, id) => {
                           const t = transactions.find((tx) => tx.id === id);
                           return sum + (t?.amount ?? 0);
                         }, 0),
@@ -11337,7 +11384,7 @@ export function FinanceApp() {
                   </button>
                   <button
                     type="submit"
-                    disabled={!draftGroupName.trim() || (!editingGroupId && selectedTransactionIds.length < 2)}
+                    disabled={!draftGroupName.trim() || (!editingGroupId && selectedGroupableTransactionIds.length < 2)}
                     className="rounded-2xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:opacity-50"
                   >
                     {editingGroupId ? "Salvar" : "Criar grupo"}
@@ -14672,7 +14719,7 @@ export function FinanceApp() {
               <MetricStack
                 dark
                 label="Lancamentos"
-                value={String(selectedCardStatementTransactions.length)}
+                value={String(selectedCardStatementItems.length)}
                 support={selectedCardStatementDueLabel ? `Vence ${selectedCardStatementDueLabel}` : "Sem fatura"}
               />
             </div>
@@ -14688,14 +14735,10 @@ export function FinanceApp() {
           <Panel title="Meses da fatura" description="Passe pelos meses e veja o que estava dentro de cada fechamento.">
             <div className="flex gap-3 overflow-x-auto pb-2">
               {selectedCardStatementMonths.map((monthValue) => {
-                const total = transactions
-                  .filter(
-                    (transaction) =>
-                      transaction.cardId === selectedCardDetail.id &&
-                      transaction.cardMode === "credit" &&
-                      getCardStatementMonthForTransaction(selectedCardDetail, transaction) === monthValue,
-                  )
-                  .reduce((sum, transaction) => sum + getCreditCardTransactionSignedAmount(transaction), 0);
+                const total = getCardStatementGridItems(selectedCardDetail.id, monthValue).reduce(
+                  (sum, item) => sum + item.amount,
+                  0,
+                );
 
                 return (
                   <button
@@ -14728,13 +14771,13 @@ export function FinanceApp() {
               title={`Lancamentos de ${formatMonthLabel(monthValueToDate(selectedCardStatementMonth))}`}
               description="Tudo o que entrou nessa fatura do cartao selecionado."
               action={
-                selectedTransactionIds.length >= 2 ? (
+                selectedGroupableTransactionIds.length >= 2 ? (
                   <button
                     type="button"
                     onClick={openGroupModal}
                     className="rounded-full bg-violet-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-violet-700"
                   >
-                    Agrupar ({selectedTransactionIds.length})
+                    Agrupar ({selectedGroupableTransactionIds.length})
                   </button>
                 ) : selectedTransactionIds.length > 0 ? (
                   <button
@@ -14748,8 +14791,28 @@ export function FinanceApp() {
               }
             >
               <div className="space-y-3">
-                {selectedCardStatementTransactions.length ? (
-                  (() => {
+                {selectedCardStatementItems.length ? (
+                  <>
+                    {selectedCardStatementBillItems.map((item) => (
+                      <div
+                        key={`card-bill-item-${item.id}`}
+                        className="rounded-2xl border border-slate-200 bg-white px-4 py-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                            <p className="mt-1 text-sm text-slate-500">{item.support}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-semibold text-slate-900">{formatCurrency(item.amount)}</p>
+                            <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                              Conta vinculada
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {selectedCardStatementTransactions.length ? (() => {
                     const grouped: Transaction[] = [];
                     const ungrouped: Transaction[] = [];
                     const groupMap = new Map<string, Transaction[]>();
@@ -14879,7 +14942,8 @@ export function FinanceApp() {
                         );
                       }),
                     ];
-                  })()
+                  })() : null}
+                  </>
                 ) : (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-600">
                     Nenhum lancamento de credito apareceu nesse mes ainda.

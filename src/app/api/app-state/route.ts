@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { loadRelationalFinanceState } from "@/lib/monex-relational-state";
+import { loadRelationalFinanceState, saveRelationalFinanceState } from "@/lib/monex-relational-state";
 
 const APP_STATE_KEY = "default";
 const SUPABASE_REQUEST_TIMEOUT_MS = 12000;
@@ -89,6 +89,10 @@ export async function PUT(request: Request) {
     const body = (await request.json()) as { state?: unknown };
     if (!body.state) {
       return NextResponse.json({ error: "State payload is required." }, { status: 400 });
+    }
+    if (shouldReadRelationalState()) {
+      const payload = await saveRelationalFinanceState(config, body.state, getSupabaseRequestSignal());
+      return NextResponse.json({ ok: true, source: "relational", updatedAt: payload.updatedAt });
     }
 
     const response = await fetch(`${config.url}/rest/v1/app_state`, {

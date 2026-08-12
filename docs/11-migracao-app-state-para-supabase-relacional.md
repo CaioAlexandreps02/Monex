@@ -352,6 +352,8 @@ Observacao: enquanto a escrita relacional nao existir, o `PUT /api/app-state` co
 
 ### Fase 6 - Criar camada de escrita relacional
 
+Status: implementada em codigo como sincronizacao completa de snapshot quando `MONEX_APP_STATE_SOURCE=relational`.
+
 1. Parar de salvar o estado inteiro para cada pequena edicao.
 2. Criar endpoints por operacao:
    - criar/editar/excluir bill
@@ -360,6 +362,14 @@ Observacao: enquanto a escrita relacional nao existir, o `PUT /api/app-state` co
    - arquivar/restaurar
    - confirmar importacao
 3. Cada endpoint deve atualizar so as tabelas afetadas.
+
+Implementacao atual:
+
+- O `PUT /api/app-state` continua salvando no JSON quando `MONEX_APP_STATE_SOURCE=json`.
+- Quando `MONEX_APP_STATE_SOURCE=relational`, o `PUT /api/app-state` sincroniza o snapshot recebido para as tabelas `monex_*`.
+- A sincronizacao apaga as linhas de `owner_key = 'default'` nas tabelas relacionais e reinsere o estado completo em ordem de dependencia.
+
+Essa abordagem e adequada para a fase atual porque o volume de dados e pequeno e reduz risco de divergencia. No futuro, pode ser refinada para endpoints incrementais por operacao.
 
 ### Fase 7 - Dual-write temporario
 
