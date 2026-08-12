@@ -185,6 +185,7 @@ function mapBill(row: JsonObject) {
     plannedCardMode: asOptionalString(row.planned_card_mode),
     installments: row.installments === null ? undefined : asNumber(row.installments),
     recurringGroupId: asOptionalString(row.recurring_group_id),
+    groupId: asOptionalString(row.group_id),
     notes: asOptionalString(row.notes),
     archivedAt: asOptionalString(row.archived_at),
   });
@@ -746,6 +747,7 @@ function toBillRow(bill: JsonObject) {
     planned_card_mode: optional(bill.plannedCardMode),
     installments: optional(bill.installments),
     recurring_group_id: optional(bill.recurringGroupId),
+    group_id: optional(bill.groupId),
     notes: optional(bill.notes),
     archived_at: optional(bill.archivedAt),
   });

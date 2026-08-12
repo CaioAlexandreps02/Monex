@@ -1271,6 +1271,7 @@ export function FinanceApp() {
   const [transactions, setTransactions] = useState(seedTransactions);
   const [transactionGroups, setTransactionGroups] = useState<TransactionGroup[]>([]);
   const [selectedTransactionIds, setSelectedTransactionIds] = useState<string[]>([]);
+  const [selectedBillGroupIds, setSelectedBillGroupIds] = useState<string[]>([]);
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [draftGroupName, setDraftGroupName] = useState("");
@@ -5338,10 +5339,20 @@ export function FinanceApp() {
     return selectedTransactionIds.filter((id) => transactionIds.has(id));
   }
 
+  function getSelectedGroupableBillGroupIds() {
+    const billGroupIds = new Set(
+      bills
+        .filter((bill) => isCreditLinkedBill(bill))
+        .map((bill) => getBillStatementGroupId(bill)),
+    );
+    return selectedBillGroupIds.filter((id) => billGroupIds.has(id));
+  }
+
   function handleCreateGroup() {
     const groupableTransactionIds = getSelectedGroupableTransactionIds();
+    const groupableBillGroupIds = getSelectedGroupableBillGroupIds();
 
-    if (!draftGroupName.trim() || groupableTransactionIds.length < 2) {
+    if (!draftGroupName.trim() || groupableTransactionIds.length + groupableBillGroupIds.length < 2) {
       return;
     }
 
@@ -5354,7 +5365,13 @@ export function FinanceApp() {
 
     setTransactionGroups((current) => [...current, group]);
     setTransactions(updatedTransactions);
+    setBills((current) =>
+      current.map((bill) =>
+        groupableBillGroupIds.includes(getBillStatementGroupId(bill)) ? { ...bill, groupId: group.id } : bill,
+      ),
+    );
     setSelectedTransactionIds([]);
+    setSelectedBillGroupIds([]);
     setDraftGroupName("");
     setIsGroupModalOpen(false);
   }
@@ -5371,6 +5388,7 @@ export function FinanceApp() {
     );
 
     setTransactions(updatedTransactions);
+    setBills((current) => current.map((bill) => (bill.groupId === groupId ? { ...bill, groupId: undefined } : bill)));
     setTransactionGroups(updatedGroups);
 
     if (expandedGroupId === groupId) {
@@ -5398,13 +5416,15 @@ export function FinanceApp() {
 
   function openGroupModal() {
     const groupableTransactionIds = getSelectedGroupableTransactionIds();
+    const groupableBillGroupIds = getSelectedGroupableBillGroupIds();
 
-    if (groupableTransactionIds.length < 2) {
+    if (groupableTransactionIds.length + groupableBillGroupIds.length < 2) {
       return;
     }
 
     const firstTransaction = transactions.find((t) => t.id === groupableTransactionIds[0]);
-    setDraftGroupName(firstTransaction?.title ?? "");
+    const firstBill = bills.find((bill) => getBillStatementGroupId(bill) === groupableBillGroupIds[0]);
+    setDraftGroupName(firstTransaction?.title ?? firstBill?.title ?? "");
     setIsGroupModalOpen(true);
   }
 
@@ -5422,12 +5442,23 @@ export function FinanceApp() {
     );
   }
 
+  function toggleBillGroupSelection(billGroupId: string) {
+    setSelectedBillGroupIds((current) =>
+      current.includes(billGroupId)
+        ? current.filter((id) => id !== billGroupId)
+        : [...current, billGroupId],
+    );
+  }
+
   function clearTransactionSelection() {
     setSelectedTransactionIds([]);
+    setSelectedBillGroupIds([]);
   }
 
   const enrichedGroups = getTransactionGroups(transactionGroups, transactions);
   const selectedGroupableTransactionIds = getSelectedGroupableTransactionIds();
+  const selectedGroupableBillGroupIds = getSelectedGroupableBillGroupIds();
+  const selectedGroupableCount = selectedGroupableTransactionIds.length + selectedGroupableBillGroupIds.length;
 
   function handleSaveCardBalance(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -10719,24 +10750,37 @@ export function FinanceApp() {
                                         ...itemRows.map((item) => {
                                           const selectableTransactionId =
                                             item.sourceType === "transaction" ? item.sourceId : null;
+                                          const selectableBillGroupId = item.sourceType === "bill" ? item.sourceId : null;
+                                          const itemBill = selectableBillGroupId
+                                            ? bills.find((bill) => getBillStatementGroupId(bill) === selectableBillGroupId)
+                                            : undefined;
                                           const isItemSelected = selectableTransactionId
                                             ? selectedTransactionIds.includes(selectableTransactionId)
-                                            : false;
+                                            : selectableBillGroupId
+                                              ? selectedBillGroupIds.includes(selectableBillGroupId)
+                                              : false;
                                           const itemTransaction = selectableTransactionId
                                             ? transactions.find((t) => t.id === selectableTransactionId)
                                             : undefined;
-                                          const itemGroup = itemTransaction?.groupId ? transactionGroups.find((g) => g.id === itemTransaction.groupId) : null;
+                                          const itemGroupId = itemTransaction?.groupId ?? itemBill?.groupId;
+                                          const itemGroup = itemGroupId ? transactionGroups.find((g) => g.id === itemGroupId) : null;
 
                                           return (
                                             <tr key={`${row.id}-${item.id}`} className="align-top">
                                               <th className="sticky left-0 z-20 w-[180px] border border-slate-200 bg-white px-2 py-2.5 text-left">
                                                 <div className={`rounded-xl px-1 py-1 ${isItemSelected ? "bg-violet-50" : ""}`}>
                                                   <div className="flex items-start gap-2">
-                                                    {selectableTransactionId ? (
+                                                    {selectableTransactionId || selectableBillGroupId ? (
                                                       <input
                                                         type="checkbox"
                                                         checked={isItemSelected}
-                                                        onChange={() => toggleTransactionSelection(selectableTransactionId)}
+                                                        onChange={() =>
+                                                          selectableTransactionId
+                                                            ? toggleTransactionSelection(selectableTransactionId)
+                                                            : selectableBillGroupId
+                                                              ? toggleBillGroupSelection(selectableBillGroupId)
+                                                              : undefined
+                                                        }
                                                         className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
                                                       />
                                                     ) : (
@@ -10914,7 +10958,7 @@ export function FinanceApp() {
                       <button
                         type="button"
                         onClick={openGroupModal}
-                        disabled={selectedGroupableTransactionIds.length < 2}
+                        disabled={selectedGroupableCount < 2}
                         className="rounded-full bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:opacity-50"
                       >
                         Agrupar
@@ -11343,23 +11387,41 @@ export function FinanceApp() {
                   />
                 </FormField>
 
-                {!editingGroupId && selectedGroupableTransactionIds.length > 0 && (
+                {!editingGroupId && selectedGroupableCount > 0 && (
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                     <p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">
-                      Transacoes selecionadas ({selectedGroupableTransactionIds.length})
+                      Itens selecionados ({selectedGroupableCount})
                     </p>
                     <div className="mt-2 space-y-1">
-                      {selectedGroupableTransactionIds.slice(0, 5).map((id) => {
-                        const t = transactions.find((tx) => tx.id === id);
-                        return t ? (
-                          <p key={id} className="text-sm text-slate-700">
-                            {t.title} - {formatCurrency(t.amount)}
+                      {[
+                        ...selectedGroupableTransactionIds.map((id) => {
+                          const transaction = transactions.find((tx) => tx.id === id);
+                          return transaction
+                            ? { id, title: transaction.title, amount: transaction.amount }
+                            : null;
+                        }),
+                        ...selectedGroupableBillGroupIds.map((id) => {
+                          const groupedBills = bills.filter((bill) => getBillStatementGroupId(bill) === id);
+                          const firstBill = groupedBills[0];
+                          return firstBill
+                            ? {
+                                id,
+                                title: firstBill.title,
+                                amount: groupedBills.reduce((sum, bill) => sum + bill.amount, 0),
+                              }
+                            : null;
+                        }),
+                      ]
+                        .filter((item): item is { id: string; title: string; amount: number } => Boolean(item))
+                        .slice(0, 5)
+                        .map((item) => (
+                          <p key={item.id} className="text-sm text-slate-700">
+                            {item.title} - {formatCurrency(item.amount)}
                           </p>
-                        ) : null;
-                      })}
-                      {selectedGroupableTransactionIds.length > 5 && (
+                        ))}
+                      {selectedGroupableCount > 5 && (
                         <p className="text-xs text-slate-500">
-                          ...e mais {selectedGroupableTransactionIds.length - 5}
+                          ...e mais {selectedGroupableCount - 5}
                         </p>
                       )}
                     </div>
@@ -11368,7 +11430,11 @@ export function FinanceApp() {
                         selectedGroupableTransactionIds.reduce((sum, id) => {
                           const t = transactions.find((tx) => tx.id === id);
                           return sum + (t?.amount ?? 0);
-                        }, 0),
+                        }, 0) +
+                          selectedGroupableBillGroupIds.reduce((sum, id) => {
+                            const groupedBills = bills.filter((bill) => getBillStatementGroupId(bill) === id);
+                            return sum + groupedBills.reduce((billSum, bill) => billSum + bill.amount, 0);
+                          }, 0),
                       )}
                     </p>
                   </div>
@@ -11384,7 +11450,7 @@ export function FinanceApp() {
                   </button>
                   <button
                     type="submit"
-                    disabled={!draftGroupName.trim() || (!editingGroupId && selectedGroupableTransactionIds.length < 2)}
+                    disabled={!draftGroupName.trim() || (!editingGroupId && selectedGroupableCount < 2)}
                     className="rounded-2xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:opacity-50"
                   >
                     {editingGroupId ? "Salvar" : "Criar grupo"}
@@ -14771,21 +14837,21 @@ export function FinanceApp() {
               title={`Lancamentos de ${formatMonthLabel(monthValueToDate(selectedCardStatementMonth))}`}
               description="Tudo o que entrou nessa fatura do cartao selecionado."
               action={
-                selectedGroupableTransactionIds.length >= 2 ? (
+                selectedGroupableCount >= 2 ? (
                   <button
                     type="button"
                     onClick={openGroupModal}
                     className="rounded-full bg-violet-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-violet-700"
                   >
-                    Agrupar ({selectedGroupableTransactionIds.length})
+                    Agrupar ({selectedGroupableCount})
                   </button>
-                ) : selectedTransactionIds.length > 0 ? (
+                ) : selectedTransactionIds.length > 0 || selectedBillGroupIds.length > 0 ? (
                   <button
                     type="button"
                     onClick={clearTransactionSelection}
                     className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
                   >
-                    Limpar ({selectedTransactionIds.length})
+                    Limpar ({selectedTransactionIds.length + selectedBillGroupIds.length})
                   </button>
                 ) : null
               }
@@ -14793,25 +14859,48 @@ export function FinanceApp() {
               <div className="space-y-3">
                 {selectedCardStatementItems.length ? (
                   <>
-                    {selectedCardStatementBillItems.map((item) => (
-                      <div
-                        key={`card-bill-item-${item.id}`}
-                        className="rounded-2xl border border-slate-200 bg-white px-4 py-3"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-slate-900">{item.title}</p>
-                            <p className="mt-1 text-sm text-slate-500">{item.support}</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-sm font-semibold text-slate-900">{formatCurrency(item.amount)}</p>
-                            <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                              Conta vinculada
-                            </p>
+                    {selectedCardStatementBillItems.map((item) => {
+                      const bill = bills.find((currentBill) => getBillStatementGroupId(currentBill) === item.sourceId);
+                      const group = bill?.groupId ? transactionGroups.find((currentGroup) => currentGroup.id === bill.groupId) : null;
+                      const isSelected = selectedBillGroupIds.includes(item.sourceId);
+
+                      return (
+                        <div
+                          key={`card-bill-item-${item.id}`}
+                          className={`rounded-2xl border bg-white px-4 py-3 ${
+                            isSelected ? "border-violet-400 ring-2 ring-violet-200" : "border-slate-200"
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex items-start gap-3">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleBillGroupSelection(item.sourceId)}
+                                className="mt-1 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                              />
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                                  {group ? (
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
+                                      Grupo: {group.nome}
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <p className="mt-1 text-sm text-slate-500">{item.support}</p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-sm font-semibold text-slate-900">{formatCurrency(item.amount)}</p>
+                              <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                                Conta vinculada
+                              </p>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                     {selectedCardStatementTransactions.length ? (() => {
                     const grouped: Transaction[] = [];
                     const ungrouped: Transaction[] = [];

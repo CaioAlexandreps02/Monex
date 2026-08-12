@@ -135,6 +135,7 @@ export interface Bill {
   plannedCardMode?: CardMode;
   installments?: number;
   recurringGroupId?: string;
+  groupId?: string;
   notes?: string;
   archivedAt?: string;
 }

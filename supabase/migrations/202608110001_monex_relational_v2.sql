@@ -66,6 +66,7 @@ create table if not exists public.monex_bills (
   planned_card_mode text check (planned_card_mode in ('credit', 'debit')),
   installments integer,
   recurring_group_id text,
+  group_id text,
   notes text,
   archived_at timestamptz,
   created_at timestamptz not null default now(),

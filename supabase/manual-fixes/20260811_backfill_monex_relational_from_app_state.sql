@@ -10,6 +10,13 @@ select *
 from public.app_state
 where key = 'default';
 
+alter table public.monex_bills
+add column if not exists group_id text;
+
+create index if not exists idx_monex_bills_group_id
+on public.monex_bills (owner_key, group_id)
+where group_id is not null;
+
 alter table if exists public.monex_imported_statement_items
 drop constraint if exists monex_imported_statement_items_owner_key_fingerprint_key;
 
@@ -232,6 +239,7 @@ insert into public.monex_bills (
   planned_card_mode,
   installments,
   recurring_group_id,
+  group_id,
   notes,
   archived_at
 )
@@ -252,6 +260,7 @@ select
   nullif(bill->>'plannedCardMode', ''),
   nullif(bill->>'installments', '')::integer,
   nullif(bill->>'recurringGroupId', ''),
+  nullif(bill->>'groupId', ''),
   nullif(bill->>'notes', ''),
   nullif(bill->>'archivedAt', '')::timestamptz
 from source_state,
@@ -272,6 +281,7 @@ on conflict (id) do update set
   planned_card_mode = excluded.planned_card_mode,
   installments = excluded.installments,
   recurring_group_id = excluded.recurring_group_id,
+  group_id = excluded.group_id,
   notes = excluded.notes,
   archived_at = excluded.archived_at,
   updated_at = now();
