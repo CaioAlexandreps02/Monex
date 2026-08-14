@@ -1363,6 +1363,7 @@ export function FinanceApp() {
   const [importBrowseSearch, setImportBrowseSearch] = useState("");
   const [pendingImportCreationItemId, setPendingImportCreationItemId] = useState<string | null>(null);
   const [pendingCategoryImportItemId, setPendingCategoryImportItemId] = useState<string | null>(null);
+  const [pendingCategoryMerchantId, setPendingCategoryMerchantId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [transactionTypeFilter, setTransactionTypeFilter] = useState<"all" | "income" | "expense">(
     "all",
@@ -1456,6 +1457,22 @@ export function FinanceApp() {
       value: category.id,
       label: getCategoryOptionLabel(category),
     }));
+  }
+
+  function getAllCategorySelectOptions() {
+    return categories
+      .filter((category) => !category.parentId || categories.some((parent) => parent.id === category.parentId))
+      .sort((left, right) => {
+        const leftParent = left.parentId ? categories.find((item) => item.id === left.parentId)?.name ?? "" : left.name;
+        const rightParent = right.parentId ? categories.find((item) => item.id === right.parentId)?.name ?? "" : right.name;
+        return `${leftParent}-${left.parentId ? left.name : ""}`.localeCompare(
+          `${rightParent}-${right.parentId ? right.name : ""}`,
+        );
+      })
+      .map((category) => ({
+        value: category.id,
+        label: getCategoryOptionLabel(category),
+      }));
   }
 
   function getSuggestedImportCategoryId(normalizedDescription: string, type: Transaction["type"]) {
@@ -1860,7 +1877,7 @@ export function FinanceApp() {
       direction,
       sourceKind,
       transport: options?.transport ?? "manual_upload",
-      paymentMethod: detectedMerchant?.paymentMethod ?? learningRule?.paymentMethod ?? paymentMethod,
+      paymentMethod: learningRule?.paymentMethod ?? paymentMethod,
       accountId,
       cardId,
       externalItemId: options?.externalItemId,
@@ -2132,7 +2149,6 @@ export function FinanceApp() {
             sourceKind: item.sourceKind,
             suggestedCategoryId: nextTransaction.categoryId,
             suggestedTransactionType: nextTransaction.type,
-            paymentMethod: nextTransaction.paymentMethod,
             suggestedMatch: match,
             supportCount: 1,
             mistakeCount: 0,
@@ -2203,7 +2219,6 @@ export function FinanceApp() {
             sourceKind: item.sourceKind,
             suggestedCategoryId: nextTransaction.categoryId,
             suggestedTransactionType: nextTransaction.type,
-            paymentMethod: nextTransaction.paymentMethod,
             suggestedMatch: match,
             supportCount: 1,
             mistakeCount: 0,
@@ -2225,7 +2240,6 @@ export function FinanceApp() {
           (merchant.name !== merchantName ||
             merchant.suggestedCategoryId !== nextTransaction.categoryId ||
             merchant.suggestedTransactionType !== nextTransaction.type ||
-            merchant.paymentMethod !== nextTransaction.paymentMethod ||
             getImportMatchValue(merchant.suggestedMatch) !== getImportMatchValue(match));
         const nextMistakeCount = isCorrection ? merchant.mistakeCount + 1 : merchant.mistakeCount;
         const nextSupportCount = merchant.supportCount + 1;
@@ -2236,7 +2250,6 @@ export function FinanceApp() {
           aliases: Array.from(new Set([...merchant.aliases, alias])),
           suggestedCategoryId: nextTransaction.categoryId,
           suggestedTransactionType: nextTransaction.type,
-          paymentMethod: nextTransaction.paymentMethod,
           suggestedMatch: match,
           supportCount: nextSupportCount,
           mistakeCount: nextMistakeCount,
@@ -2350,6 +2363,13 @@ export function FinanceApp() {
     );
   }
 
+  function handleEnableImportLearningRule(ruleId: string) {
+    const now = new Date().toISOString();
+    setImportLearningRules((current) =>
+      current.map((rule) => (rule.id === ruleId ? { ...rule, status: "suggested", updatedAt: now } : rule)),
+    );
+  }
+
   function handleUpdateImportMerchant(merchantId: string, patch: Partial<ImportMerchant>) {
     const now = new Date().toISOString();
     setImportMerchants((current) =>
@@ -2380,7 +2400,6 @@ export function FinanceApp() {
               reviewTitle: merchant.name,
               suggestedCategoryId: merchant.suggestedCategoryId ?? item.suggestedCategoryId,
               suggestedTransactionType: merchant.suggestedTransactionType ?? item.suggestedTransactionType,
-              paymentMethod: merchant.paymentMethod ?? item.paymentMethod,
               suggestedMatch: merchant.suggestedMatch ?? item.suggestedMatch,
               confidence: Math.max(item.confidence, merchant.status === "approved" ? 0.9 : 0.78),
             }
@@ -4660,7 +4679,7 @@ export function FinanceApp() {
     }
   }
 
-  function openCategoryModal(category?: Category) {
+  function openCategoryModal(category?: Category, defaults?: Partial<DraftCategory>) {
     setEditingCategoryId(category?.id ?? null);
     setDraftCategory(
       category
@@ -4670,7 +4689,10 @@ export function FinanceApp() {
             color: category.color,
             parentId: category.parentId ?? "",
           }
-        : initialDraftCategory,
+        : {
+            ...initialDraftCategory,
+            ...defaults,
+          },
     );
     setIsCategoryModalOpen(true);
   }
@@ -4680,6 +4702,7 @@ export function FinanceApp() {
     setDraftCategory(initialDraftCategory);
     setIsCategoryModalOpen(false);
     setPendingCategoryImportItemId(null);
+    setPendingCategoryMerchantId(null);
   }
 
   function handleSaveCategory(event: React.FormEvent<HTMLFormElement>) {
@@ -4756,6 +4779,17 @@ export function FinanceApp() {
         ),
       );
       setPendingCategoryImportItemId(null);
+    }
+
+    if (pendingCategoryMerchantId) {
+      setImportMerchants((current) =>
+        current.map((merchant) =>
+          merchant.id === pendingCategoryMerchantId
+            ? { ...merchant, suggestedCategoryId: nextCategory.id, updatedAt: new Date().toISOString() }
+            : merchant,
+        ),
+      );
+      setPendingCategoryMerchantId(null);
     }
   }
 
@@ -9889,7 +9923,7 @@ export function FinanceApp() {
                           onChange={(value) => {
                             if (value === "__create_new__") {
                               setPendingCategoryImportItemId(item.id);
-                              openCategoryModal();
+                              openCategoryModal(undefined, { type: transactionType });
                               return;
                             }
                             setImportedStatementItems((current) =>
@@ -9899,9 +9933,9 @@ export function FinanceApp() {
                             );
                           }}
                           options={[
-                            { value: "", label: "Sem categoria" },
-                            ...getCategorySelectOptions(transactionType).map((option) => ({ ...option, icon: Tag })),
-                            { value: "__create_new__", label: "+ Criar nova categoria" },
+                            { value: "", label: "Sem categoria", icon: Tag },
+                            ...getAllCategorySelectOptions().map((option) => ({ ...option, icon: Tag })),
+                            { value: "__create_new__", label: "+ Adicionar categoria", icon: Plus },
                           ]}
                         />
                       </FormField>
@@ -10044,7 +10078,16 @@ export function FinanceApp() {
                           ) : null}
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          {rule.status !== "approved" ? (
+                          {rule.status === "disabled" ? (
+                            <button
+                              type="button"
+                              onClick={() => handleEnableImportLearningRule(rule.id)}
+                              className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-700"
+                            >
+                              Ativar
+                            </button>
+                          ) : null}
+                          {rule.status !== "approved" && rule.status !== "disabled" ? (
                             <button
                               type="button"
                               onClick={() => handleApproveImportLearningRule(rule.id)}
@@ -10084,7 +10127,7 @@ export function FinanceApp() {
                 .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
                 .map((merchant) => {
                   const merchantType = merchant.suggestedTransactionType ?? "expense";
-                  const categoryOptions = getCategorySelectOptions(merchantType).map((option) => ({ ...option, icon: Tag }));
+                  const categoryOptions = getAllCategorySelectOptions().map((option) => ({ ...option, icon: Tag }));
 
                   return (
                     <div key={merchant.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
@@ -10130,7 +10173,7 @@ export function FinanceApp() {
                         </div>
                       </div>
 
-                      <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1.2fr_0.9fr_0.9fr]">
+                      <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1.4fr_0.9fr]">
                         <FormField label="Nome amigavel">
                           <input
                             value={merchant.name}
@@ -10154,20 +10197,19 @@ export function FinanceApp() {
                         <FormField label="Categoria">
                           <CustomSelect
                             value={merchant.suggestedCategoryId ?? ""}
-                            onChange={(value) => handleUpdateImportMerchant(merchant.id, { suggestedCategoryId: value })}
-                            options={categoryOptions.length ? categoryOptions : [{ value: "", label: "Sem categoria", icon: Tag }]}
-                          />
-                        </FormField>
-                        <FormField label="Metodo">
-                          <CustomSelect
-                            value={merchant.paymentMethod ?? "pix"}
-                            onChange={(value) => handleUpdateImportMerchant(merchant.id, { paymentMethod: value as PaymentMethod })}
+                            onChange={(value) => {
+                              if (value === "__create_new__") {
+                                setPendingCategoryMerchantId(merchant.id);
+                                openCategoryModal(undefined, { type: merchantType });
+                                return;
+                              }
+
+                              handleUpdateImportMerchant(merchant.id, { suggestedCategoryId: value || undefined });
+                            }}
                             options={[
-                              { value: "pix", label: "Pix" },
-                              { value: "bank_transfer", label: "Transferencia" },
-                              { value: "debit_card", label: "Debito" },
-                              { value: "credit_card", label: "Credito" },
-                              { value: "cash", label: "Dinheiro" },
+                              { value: "", label: "Sem categoria", icon: Tag },
+                              ...categoryOptions,
+                              { value: "__create_new__", label: "+ Adicionar categoria", icon: Plus },
                             ]}
                           />
                         </FormField>
