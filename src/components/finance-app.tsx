@@ -197,7 +197,8 @@ type PurchaseModalOptions = {
 const viewPathMap: Record<ViewId, string> = {
   home: "/",
   transactions: "/transacoes",
-  history: "/historico",
+  history: "/relatorios",
+  reconciliation: "/conciliacao",
   settings: "/configuracoes",
 };
 
@@ -770,12 +771,12 @@ const fixedSectionOrder: FixedFlowSection[] = [
 ];
 
 const fixedSectionStyles: Record<FixedFlowSection, string> = {
-  Ganhos: "border-emerald-200 bg-emerald-50/80",
-  Contas: "border-rose-200 bg-rose-50/80",
-  Planejamento: "border-rose-200 bg-rose-50/80",
-  "Gastos fixos": "border-rose-200 bg-rose-50/80",
-  "Dividas e repasses": "border-rose-200 bg-rose-50/80",
-  "Compras planejadas": "border-rose-200 bg-rose-50/80",
+  Ganhos: "border-emerald-300 bg-emerald-50/45",
+  Contas: "border-rose-300 bg-rose-50/35",
+  Planejamento: "border-rose-300 bg-rose-50/35",
+  "Gastos fixos": "border-blue-300 bg-blue-50/35",
+  "Dividas e repasses": "border-orange-300 bg-orange-50/35",
+  "Compras planejadas": "border-violet-300 bg-violet-50/35",
 };
 
 const fixedSectionDisplayLabels: Record<FixedFlowSection, string> = {
@@ -1263,11 +1264,13 @@ export function FinanceApp() {
   const activeView: ViewId =
     pathname === "/transacoes"
       ? "transactions"
-      : pathname === "/historico"
+      : pathname === "/historico" || pathname === "/relatorios"
         ? "history"
-        : pathname === "/configuracoes"
-          ? "settings"
-          : "home";
+        : pathname === "/conciliacao"
+          ? "reconciliation"
+          : pathname === "/configuracoes"
+            ? "settings"
+            : "home";
   const [homeTab, setHomeTab] = useState<HomeTab>("grid");
   const [planningScreen, setPlanningScreen] = useState<PlanningScreen>("purchases");
   const [planningBoardView, setPlanningBoardView] = useState<PlanningBoardView>("default");
@@ -1387,12 +1390,6 @@ export function FinanceApp() {
   const [pluggyConnectError, setPluggyConnectError] = useState<string | null>(null);
   const [selectedCardBillComparison, setSelectedCardBillComparison] = useState<{
     cardId: string;
-    monthValue: string;
-  } | null>(null);
-  const [selectedMonthlyGridCard, setSelectedMonthlyGridCard] = useState<{
-    rowId: string;
-    sourceId: string;
-    sourceType: MonthlyGridRow["sourceType"];
     monthValue: string;
   } | null>(null);
   const [pendingMonthlyGridDelete, setPendingMonthlyGridDelete] = useState<MonthlyGridDeleteTarget | null>(null);
@@ -3281,7 +3278,17 @@ export function FinanceApp() {
   )
     .sort()
     .reverse();
-  const activeViewLabel = navItems.find((item) => item.id === activeView)?.label ?? "Home";
+  const activeViewLabel = navItems.find((item) => item.id === activeView)?.label ?? "Planilha";
+  const activeViewSubtitle =
+    activeView === "home"
+      ? "Planejamento mensal"
+      : activeView === "transactions"
+        ? "Lancamentos e revisao do mes"
+        : activeView === "history"
+          ? "Graficos e analises"
+          : activeView === "reconciliation"
+            ? "Real vs planejado"
+            : "Preferencias do sistema";
   const remoteSaveLabel =
     remoteSaveStatus === "loading"
       ? "Conectando Supabase"
@@ -6946,7 +6953,6 @@ export function FinanceApp() {
 
     if (target.sourceType === "planned_purchase") {
       handleDeletePurchase(target.sourceId);
-      closeMonthlyGridCardModal();
       closeCommitmentModal();
       setPendingMonthlyGridDelete(null);
       return true;
@@ -6954,7 +6960,6 @@ export function FinanceApp() {
 
     if (target.sourceType === "debt") {
       handleDeleteDebt(target.sourceId);
-      closeMonthlyGridCardModal();
       closeCommitmentModal();
       setPendingMonthlyGridDelete(null);
       return true;
@@ -6985,7 +6990,6 @@ export function FinanceApp() {
         }
       }
 
-      closeMonthlyGridCardModal();
       closeCommitmentModal();
       setPendingMonthlyGridDelete(null);
       return true;
@@ -7006,7 +7010,6 @@ export function FinanceApp() {
       setTransactions((current) =>
         current.filter((transaction) => !transaction.sourceBillId || !sourceBillIds.includes(transaction.sourceBillId)),
       );
-      closeMonthlyGridCardModal();
       closeCommitmentModal();
       setPendingMonthlyGridDelete(null);
       return true;
@@ -8916,7 +8919,6 @@ export function FinanceApp() {
   function beginMonthlyGridDrag(rowId: string, monthValue: string) {
     monthlyGridClickSuppressedUntilRef.current = Date.now() + 500;
     setDraggedGridCell({ rowId, monthValue });
-    setSelectedMonthlyGridCard(null);
   }
 
   function endMonthlyGridDrag() {
@@ -8924,7 +8926,7 @@ export function FinanceApp() {
     setDraggedGridCell(null);
   }
 
-  function openMonthlyGridCardModal(row: MonthlyGridRow, monthValue: string) {
+  function openMonthlyGridCellEditor(row: MonthlyGridRow, monthValue: string) {
     if (Date.now() < monthlyGridClickSuppressedUntilRef.current) {
       return;
     }
@@ -8934,16 +8936,7 @@ export function FinanceApp() {
       return;
     }
 
-    setSelectedMonthlyGridCard({
-      rowId: row.id,
-      sourceId: row.sourceId,
-      sourceType: row.sourceType,
-      monthValue,
-    });
-  }
-
-  function closeMonthlyGridCardModal() {
-    setSelectedMonthlyGridCard(null);
+    openCommitmentEditorFromGrid(row, monthValue);
   }
 
   function handleDebtAdvance(debtId: string) {
@@ -9338,53 +9331,24 @@ export function FinanceApp() {
   }
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(103,181,255,0.25),_transparent_32%),linear-gradient(180deg,_#eef6ff_0%,_#f8fbff_35%,_#f4f7fb_100%)] text-slate-900">
-      <div className="mx-auto flex min-h-screen max-w-[1600px] gap-4 px-4 py-4 lg:px-6 lg:py-6">
+    <div className="min-h-screen bg-[#f4f7fb] text-slate-900">
+      <div className="flex min-h-screen">
         <NavigationRail
           activeView={activeView}
           onNavigate={handleNavigate}
+          activeHomeTab={homeTab}
+          onHomeTabNavigate={(tabId) => updateHomeLocation(tabId)}
         />
 
-        <div className="flex min-w-0 flex-1 flex-col gap-4">
-          <header className="rounded-[26px] border border-white/70 bg-white/85 px-5 py-4 shadow-[0_18px_50px_rgba(31,58,126,0.08)] backdrop-blur">
+        <div className="flex min-w-0 flex-1 flex-col gap-4 px-4 py-4 lg:px-5">
+          <header className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-[0_10px_28px_rgba(15,23,42,0.04)]">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-2xl font-semibold tracking-tight text-slate-950">{activeViewLabel}</p>
+                <p className="mt-1 text-sm font-medium text-slate-500">{activeViewSubtitle}</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <div
-                  className={`flex min-h-[60px] items-center gap-3 rounded-[20px] border px-4 py-3 shadow-[0_12px_30px_rgba(15,23,42,0.05)] ${remoteSaveTone}`}
-                  title={remoteSaveError ?? undefined}
-                >
-                  <span className={`h-2.5 w-2.5 rounded-full ${remoteSaveDot}`} />
-                  <div className="text-left">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em]">
-                      Dados
-                    </p>
-                    <p className="mt-1 text-sm font-semibold">
-                      {remoteSaveLabel}
-                    </p>
-                    {remoteSaveStatus === "saved" && lastRemoteSavedLabel ? (
-                      <p className="mt-0.5 text-[11px] opacity-75">Ultimo: {lastRemoteSavedLabel}</p>
-                    ) : null}
-                  </div>
-                  {remoteSaveStatus === "error" ? (
-                    <button
-                      type="button"
-                      onClick={() => window.location.reload()}
-                      className="rounded-full bg-white/70 px-3 py-1 text-xs font-semibold transition hover:bg-white"
-                    >
-                      Recarregar
-                    </button>
-                  ) : null}
-                </div>
-                <div className="rounded-[20px] border border-slate-200 bg-white px-3 py-2 shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
-                  <label
-                    className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400"
-                    htmlFor="header-month-select"
-                  >
-                    Mes de analise
-                  </label>
+                <div className="min-w-[168px]">
                   <CustomSelect
                     id="header-month-select"
                     value={selectedMonth}
@@ -9397,23 +9361,39 @@ export function FinanceApp() {
                     className="w-full"
                   />
                 </div>
+                <div
+                  className={`flex min-h-[44px] items-center gap-2 rounded-xl border px-3 py-2 text-sm shadow-sm ${remoteSaveTone}`}
+                  title={
+                    remoteSaveError ??
+                    (lastRemoteSavedLabel ? `Ultimo salvamento: ${lastRemoteSavedLabel}` : undefined)
+                  }
+                >
+                  <span className={`h-2 w-2 rounded-full ${remoteSaveDot}`} />
+                  <div className="text-left">
+                    <p className="font-semibold">
+                      {remoteSaveLabel}
+                    </p>
+                  </div>
+                  {remoteSaveStatus === "error" ? (
+                    <button
+                      type="button"
+                      onClick={() => window.location.reload()}
+                      className="rounded-full bg-white/70 px-3 py-1 text-xs font-semibold transition hover:bg-white"
+                    >
+                      Recarregar
+                    </button>
+                  ) : null}
+                </div>
                 <div className="relative">
                   <button
                     type="button"
                     onClick={() => setIsAlertsPanelOpen((current) => !current)}
-                    className="flex min-h-[60px] items-center gap-3 rounded-[20px] border border-slate-200 bg-white px-4 py-3 shadow-[0_12px_30px_rgba(15,23,42,0.05)] transition hover:bg-slate-50"
+                    className="flex min-h-[44px] items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
                   >
-                    <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-900 text-lg text-white">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-900 text-sm text-white">
                       !
                     </span>
-                    <div className="text-left">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">
-                        Alertas
-                      </p>
-                      <p className="mt-1 text-sm font-semibold text-slate-900">
-                        {headerFocusItems.length} itens de foco
-                      </p>
-                    </div>
+                    {headerFocusItems.length} foco
                   </button>
                   {isAlertsPanelOpen ? (
                     <div className="absolute right-0 top-[calc(100%+10px)] z-30 w-[340px] max-w-[90vw] rounded-[24px] border border-slate-200 bg-white p-4 shadow-[0_28px_80px_rgba(15,23,42,0.18)]">
@@ -9463,6 +9443,7 @@ export function FinanceApp() {
             {activeView === "home" && renderDashboard()}
             {activeView === "transactions" && renderTransactionsWorkspace()}
             {activeView === "history" && renderReports()}
+            {activeView === "reconciliation" && renderReconciliationWorkspace()}
             {activeView === "settings" && renderSettingsWorkspace()}
           </main>
         </div>
@@ -9471,93 +9452,60 @@ export function FinanceApp() {
   );
 
   function renderDashboard() {
-    const homeTabs: Array<{ id: HomeTab; label: string; description: string; tone: string; icon: React.ElementType }> = [
+    const homeTabs: Array<{ id: HomeTab; label: string; description: string; icon: React.ElementType }> = [
       {
         id: "grid",
-        label: "Planilha",
-        description: "Planejar meses",
-        tone: "from-blue-600 to-sky-500",
+        label: "Resumo",
+        description: "Planilha principal",
         icon: Table,
       },
       {
         id: "planning",
         label: "Planejamento",
         description: "Compras e metas",
-        tone: "from-violet-600 to-indigo-500",
         icon: Target,
       },
       {
         id: "accounts",
         label: "Contas",
         description: "Obrigacoes",
-        tone: "from-emerald-600 to-teal-500",
         icon: Wallet,
       },
       {
         id: "cards",
         label: "Cartoes",
         description: "Faturas",
-        tone: "from-sky-600 to-blue-500",
         icon: CreditCard,
       },
       {
         id: "imports",
         label: "Importar",
         description: "Extratos",
-        tone: "from-slate-700 to-slate-500",
         icon: CheckCircle2,
       },
     ];
-    const activeHomeTab = homeTabs.find((tab) => tab.id === homeTab) ?? homeTabs[0];
 
     return (
       <div className="space-y-4">
-        <div className="overflow-hidden rounded-[34px] border border-white/80 bg-white/80 shadow-[0_24px_80px_rgba(30,79,160,0.10)] backdrop-blur">
-          <div className={`bg-gradient-to-r ${activeHomeTab.tone} px-5 py-5 text-white`}>
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/72">
-                  Central Monex
-                </p>
-                <h2 className="mt-2 text-2xl font-semibold tracking-tight">
-                  {activeHomeTab.id === "grid" ? "Planeje os proximos meses pela planilha" : activeHomeTab.label}
-                </h2>
-                <p className="mt-1 max-w-2xl text-sm text-white/78">
-                  {activeHomeTab.id === "grid"
-                    ? "Ajuste entradas, contas, faturas e compras futuras sem sair do fluxo principal."
-                    : activeHomeTab.description}
-                </p>
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-right sm:flex">
-                <div className="rounded-2xl bg-white/14 px-4 py-3 ring-1 ring-white/18">
-                  <p className="text-[10px] uppercase tracking-[0.2em] text-white/62">Entradas</p>
-                  <p className="mt-1 text-sm font-semibold">{formatCurrency(fixedMonthPlannedIncome)}</p>
-                </div>
-                <div className="rounded-2xl bg-white/14 px-4 py-3 ring-1 ring-white/18">
-                  <p className="text-[10px] uppercase tracking-[0.2em] text-white/62">Saidas</p>
-                  <p className="mt-1 text-sm font-semibold">{formatCurrency(fixedMonthPlannedExpense)}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="flex gap-2 overflow-x-auto border-t border-white/70 bg-white/72 px-3 py-3">
+        <div className="lg:hidden">
+          <div className="flex gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_10px_28px_rgba(15,23,42,0.04)]">
             {homeTabs.map((tab) => (
               <button
                 key={tab.id}
                 type="button"
                 onClick={() => updateHomeLocation(tab.id)}
-                className={`group flex items-center gap-2.5 min-w-[150px] rounded-[22px] px-4 py-3 text-left transition duration-200 ${
+                className={`group flex min-w-[132px] items-center gap-2 rounded-xl px-3 py-2 text-left transition duration-200 ${
                   homeTab === tab.id
-                    ? "bg-slate-950 text-white shadow-[0_18px_40px_rgba(15,23,42,0.18)]"
-                    : "bg-white/72 text-slate-600 ring-1 ring-slate-200 hover:-translate-y-0.5 hover:bg-white hover:text-slate-950"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-950"
                 }`}
               >
-                <tab.icon className="h-5 w-5 shrink-0" />
+                <tab.icon className="h-4 w-4 shrink-0" />
                 <div>
-                  <span className="block text-sm font-semibold">{tab.label}</span>
+                  <span className="block text-xs font-semibold">{tab.label}</span>
                   <span
-                    className={`mt-1 block text-[11px] uppercase tracking-[0.16em] ${
-                      homeTab === tab.id ? "text-white/58" : "text-slate-400 group-hover:text-slate-500"
+                    className={`mt-0.5 block text-[10px] ${
+                      homeTab === tab.id ? "text-white/70" : "text-slate-400"
                     }`}
                   >
                     {tab.description}
@@ -10315,7 +10263,7 @@ export function FinanceApp() {
         {workspaceMode === "fixed" ? (
           <div className="grid min-w-0 max-w-full gap-4">
             <Panel
-              title="Centro operacional em planilha"
+              title=""
               description=""
             >
               <div className="mb-4 rounded-[26px] border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-sky-50 px-4 py-4 lg:hidden">
@@ -10327,41 +10275,49 @@ export function FinanceApp() {
                 </p>
               </div>
               <div className="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-[24px] border border-emerald-100 bg-gradient-to-br from-emerald-50 to-white px-4 py-4 shadow-[0_18px_42px_rgba(16,185,129,0.08)] transition duration-200 hover:-translate-y-0.5">
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
                   <div className="flex items-center gap-1.5">
-                    <TrendingUp className="h-4 w-4 text-emerald-500" />
-                    <p className="text-[11px] uppercase tracking-[0.22em] text-emerald-700">Entradas do mes</p>
+                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+                      <TrendingUp className="h-4 w-4" />
+                    </span>
+                    <p className="text-sm font-semibold text-slate-500">Entradas do mes</p>
                   </div>
-                  <p className="mt-2 text-xl font-semibold text-emerald-700">
+                  <p className="mt-2 text-xl font-semibold text-emerald-600">
                     {formatCurrency(fixedMonthPlannedIncome)}
                   </p>
                 </div>
-                <div className="rounded-[24px] border border-rose-100 bg-gradient-to-br from-rose-50 to-white px-4 py-4 shadow-[0_18px_42px_rgba(244,63,94,0.08)] transition duration-200 hover:-translate-y-0.5">
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
                   <div className="flex items-center gap-1.5">
-                    <TrendingDown className="h-4 w-4 text-rose-400" />
-                    <p className="text-[11px] uppercase tracking-[0.22em] text-rose-700">Saidas do mes</p>
+                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-rose-50 text-rose-600">
+                      <TrendingDown className="h-4 w-4" />
+                    </span>
+                    <p className="text-sm font-semibold text-slate-500">Saidas do mes</p>
                   </div>
-                  <p className="mt-2 text-xl font-semibold text-rose-700">
+                  <p className="mt-2 text-xl font-semibold text-rose-600">
                     {formatCurrency(fixedMonthPlannedExpense)}
                   </p>
                 </div>
-                <div className="rounded-[24px] border border-sky-100 bg-gradient-to-br from-sky-50 to-white px-4 py-4 shadow-[0_18px_42px_rgba(14,165,233,0.08)] transition duration-200 hover:-translate-y-0.5">
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
                   <div className="flex items-center gap-1.5">
-                    <CheckCircle2 className="h-4 w-4 text-sky-500" />
-                    <p className="text-[11px] uppercase tracking-[0.22em] text-sky-700">Ja marcados</p>
+                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-blue-600">
+                      <CheckCircle2 className="h-4 w-4" />
+                    </span>
+                    <p className="text-sm font-semibold text-slate-500">Ja marcados</p>
                   </div>
-                  <p className="mt-2 text-xl font-semibold text-sky-700">{fixedMonthCompletedCount}</p>
+                  <p className="mt-2 text-xl font-semibold text-slate-950">{fixedMonthCompletedCount} itens</p>
                 </div>
-                <div className="rounded-[24px] border border-violet-100 bg-gradient-to-br from-violet-50 to-white px-4 py-4 shadow-[0_18px_42px_rgba(124,58,237,0.08)] transition duration-200 hover:-translate-y-0.5">
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
                   <div className="flex items-center gap-1.5">
-                    <DollarSign className="h-4 w-4 text-violet-500" />
-                    <p className="text-[11px] uppercase tracking-[0.22em] text-violet-700">Saldo previsto</p>
+                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-blue-600">
+                      <DollarSign className="h-4 w-4" />
+                    </span>
+                    <p className="text-sm font-semibold text-slate-500">Saldo previsto</p>
                   </div>
                   <p
                     className={`mt-2 text-xl font-semibold ${
                       fixedMonthPlannedIncome - fixedMonthPlannedExpense >= 0
-                        ? "text-violet-700"
-                        : "text-rose-700"
+                        ? "text-blue-600"
+                        : "text-rose-600"
                     }`}
                   >
                     {formatCurrency(fixedMonthPlannedIncome - fixedMonthPlannedExpense)}
@@ -10369,25 +10325,25 @@ export function FinanceApp() {
                 </div>
               </div>
 
-              <div className="mt-5 max-w-full overflow-x-auto pb-2">
-                <div className="w-full min-w-[820px] rounded-[28px] border border-blue-950/80 bg-[linear-gradient(135deg,#020617,#0b1f4d_55%,#0a3c73)] px-3 py-3 shadow-[0_22px_58px_rgba(15,23,42,0.22)]">
+              <div className="mt-4 max-w-full overflow-x-auto pb-2">
+                <div className="w-full min-w-[820px] rounded-2xl border border-slate-200 bg-white px-3 py-3">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-2">
-                    <p className="text-sm font-semibold text-white">Comparativo mensal</p>
-                    <p className="max-w-full text-[11px] uppercase tracking-[0.18em] text-white/60">
-                      Entradas, saidas programadas e saldo previsto
+                    <p className="text-sm font-semibold text-slate-950">Comparativo mensal</p>
+                    <p className="max-w-full text-xs font-medium text-slate-500">
+                      Ganhos - Gastos = Saldo previsto
                     </p>
                   </div>
                   <table className="w-full border-separate border-spacing-0 text-[11px]">
                     <thead>
                       <tr className="text-left">
-                        <th className="min-w-[96px] rounded-l-2xl border border-white/10 bg-white/8 px-3 py-2 text-[10px] uppercase tracking-[0.16em] text-white">
+                        <th className="min-w-[96px] rounded-l-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500">
                           Linha
                         </th>
                         {fixedMonthlyComparison.map((monthItem) => (
                           <th
                             key={monthItem.monthValue}
-                            className={`min-w-[72px] border border-white/10 px-2 py-2 text-center text-[10px] uppercase tracking-[0.16em] text-white ${
-                              monthItem.monthValue === selectedMonth ? "bg-sky-200 text-sky-950" : "bg-white/8"
+                            className={`min-w-[72px] border border-slate-200 px-2 py-2 text-center text-[10px] uppercase tracking-[0.14em] ${
+                              monthItem.monthValue === selectedMonth ? "bg-blue-50 text-blue-700 ring-1 ring-blue-400" : "bg-slate-50 text-slate-500"
                             }`}
                           >
                             {monthItem.label}
@@ -10397,14 +10353,14 @@ export function FinanceApp() {
                     </thead>
                     <tbody>
                       <tr>
-                        <th className="rounded-l-2xl border border-white/10 bg-emerald-500/16 px-3 py-2.5 text-left text-[10px] uppercase tracking-[0.16em] text-emerald-100">
+                        <th className="rounded-l-xl border border-slate-200 bg-emerald-50 px-3 py-2.5 text-left text-[10px] uppercase tracking-[0.14em] text-emerald-700">
                           Entradas
                         </th>
                         {fixedMonthlyComparison.map((monthItem) => (
                           <td
                             key={`income-${monthItem.monthValue}`}
-                            className={`border border-white/10 px-2 py-2.5 text-center font-semibold text-emerald-100 ${
-                              monthItem.monthValue === selectedMonth ? "bg-sky-100/30 ring-1 ring-sky-200/60" : "bg-transparent"
+                            className={`border border-slate-200 px-2 py-2.5 text-center font-semibold text-emerald-700 ${
+                              monthItem.monthValue === selectedMonth ? "bg-blue-50 ring-1 ring-blue-400" : "bg-white"
                             }`}
                           >
                             {monthItem.income > 0 ? formatCurrency(monthItem.income) : "-"}
@@ -10412,14 +10368,14 @@ export function FinanceApp() {
                         ))}
                       </tr>
                       <tr>
-                        <th className="rounded-l-2xl border border-white/10 bg-rose-500/16 px-3 py-2.5 text-left text-[10px] uppercase tracking-[0.16em] text-rose-100">
+                        <th className="rounded-l-xl border border-slate-200 bg-rose-50 px-3 py-2.5 text-left text-[10px] uppercase tracking-[0.14em] text-rose-700">
                           Saidas
                         </th>
                         {fixedMonthlyComparison.map((monthItem) => (
                           <td
                             key={`expenses-${monthItem.monthValue}`}
-                            className={`border border-white/10 px-2 py-2.5 text-center font-semibold text-rose-100 ${
-                              monthItem.monthValue === selectedMonth ? "bg-sky-100/30 ring-1 ring-sky-200/60" : "bg-transparent"
+                            className={`border border-slate-200 px-2 py-2.5 text-center font-semibold text-rose-600 ${
+                              monthItem.monthValue === selectedMonth ? "bg-blue-50 ring-1 ring-blue-400" : "bg-white"
                             }`}
                           >
                             {monthItem.expenses > 0 ? formatCurrency(monthItem.expenses) : "-"}
@@ -10427,15 +10383,15 @@ export function FinanceApp() {
                         ))}
                       </tr>
                       <tr>
-                        <th className="rounded-l-2xl border border-white/10 bg-white/12 px-3 py-2.5 text-left text-[10px] uppercase tracking-[0.16em] text-white">
+                        <th className="rounded-l-xl border border-slate-200 bg-blue-50 px-3 py-2.5 text-left text-[10px] uppercase tracking-[0.14em] text-blue-700">
                           Saldo
                         </th>
                         {fixedMonthlyComparison.map((monthItem) => (
                           <td
                             key={`balance-${monthItem.monthValue}`}
-                            className={`border border-white/10 px-2 py-2.5 text-center font-semibold ${
-                              monthItem.balance >= 0 ? "text-emerald-100" : "text-rose-100"
-                            } ${monthItem.monthValue === selectedMonth ? "bg-sky-100/30 ring-1 ring-sky-200/60" : "bg-transparent"}`}
+                            className={`border border-slate-200 px-2 py-2.5 text-center font-semibold ${
+                              monthItem.balance >= 0 ? "text-emerald-700" : "text-rose-600"
+                            } ${monthItem.monthValue === selectedMonth ? "bg-blue-50 ring-1 ring-blue-400" : "bg-white"}`}
                           >
                             {formatCurrency(monthItem.balance)}
                           </td>
@@ -10473,16 +10429,22 @@ export function FinanceApp() {
                   return (
                     <div
                       key={section}
-                      className={`min-w-0 overflow-hidden rounded-[30px] border px-3 py-3 shadow-[0_18px_46px_rgba(31,58,126,0.06)] transition duration-200 ${fixedSectionStyles[section]}`}
+                      className={`min-w-0 overflow-hidden rounded-2xl border px-3 py-3 transition duration-200 ${fixedSectionStyles[section]}`}
                     >
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="space-y-2">
-                          <p className="text-base font-semibold text-slate-900">{fixedSectionDisplayLabels[section]}</p>
+                          <p
+                            className={`text-base font-semibold ${
+                              section === "Ganhos" ? "text-emerald-800" : "text-rose-700"
+                            }`}
+                          >
+                            {fixedSectionDisplayLabels[section]}
+                          </p>
                           <div className="flex flex-wrap gap-2">
-                            <span className="rounded-full bg-white/85 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            <span className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-slate-500 ring-1 ring-slate-200">
                               {rows.length} itens
                             </span>
-                            <span className="rounded-full bg-white/85 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            <span className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-slate-500 ring-1 ring-slate-200">
                               Mes atual {formatCurrency(sectionCurrentMonthTotal)}
                             </span>
                           </div>
@@ -10502,7 +10464,7 @@ export function FinanceApp() {
                               <button
                                 type="button"
                                 onClick={clearTransactionSelection}
-                                className="flex h-9 items-center rounded-full border border-slate-200 bg-white/85 px-4 text-xs font-semibold text-slate-700 transition hover:bg-white"
+                                className="flex h-9 items-center rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
                               >
                                 Limpar ({selectedTransactionIds.length + selectedBillGroupIds.length})
                               </button>
@@ -10521,7 +10483,7 @@ export function FinanceApp() {
                             }
                             aria-label={`Adicionar em ${fixedSectionDisplayLabels[section]}`}
                             title={`Adicionar ${section === "Ganhos" ? "ganho" : section === "Planejamento" ? "compra planejada" : "gasto"}`}
-                            className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white transition hover:bg-slate-700"
+                            className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 text-white transition hover:bg-blue-700"
                           >
                             <Plus className="h-4 w-4" />
                           </button>
@@ -10533,12 +10495,12 @@ export function FinanceApp() {
                                 [section]: !current[section],
                               }))
                             }
-                            className="rounded-full border border-slate-200 bg-white/85 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-white"
+                            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
                           >
                             {isCollapsed ? "Expandir" : "Recolher"}
                           </button>
-                          <div className="rounded-2xl bg-white/85 px-4 py-3 text-right">
-                            <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Total do ano</p>
+                          <div className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-right">
+                            <p className="text-[11px] font-semibold text-slate-500">Total do ano</p>
                             <p className="mt-2 text-base font-semibold text-slate-900">
                               {formatCurrency(sectionTotal)}
                             </p>
@@ -10547,24 +10509,24 @@ export function FinanceApp() {
                       </div>
 
                       {!isCollapsed ? (
-                        <div className="mt-4 overflow-x-auto pb-2">
+                        <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200 bg-white pb-2 shadow-sm">
                           <table className="w-full min-w-[1120px] table-fixed border-separate border-spacing-0 text-[11px]">
                             <thead>
                               <tr className="text-left">
-                                <th className="sticky left-0 z-30 w-[180px] rounded-l-2xl border border-slate-200 bg-slate-900 px-2 py-2.5 text-[10px] uppercase tracking-[0.16em] text-white">
+                                <th className="sticky left-0 z-30 w-[180px] border-b border-r border-slate-300 bg-slate-200 px-3 py-3 text-[10px] uppercase tracking-[0.14em] text-slate-700">
                                   Item
                                 </th>
                                 {salaryCalendarMonths.map((monthItem) => (
                                   <th
                                     key={monthItem.monthValue}
-                                    className={`z-20 w-[78px] border border-slate-200 bg-slate-900 px-1 py-2.5 text-center text-[10px] uppercase tracking-[0.16em] text-white ${
-                                      monthItem.monthValue === selectedMonth ? "bg-sky-200 text-sky-950 ring-2 ring-sky-300" : ""
+                                    className={`z-20 w-[78px] border-b border-r border-slate-300 bg-slate-200 px-1 py-3 text-center text-[10px] uppercase tracking-[0.14em] text-slate-700 ${
+                                      monthItem.monthValue === selectedMonth ? "bg-blue-100 text-blue-900 ring-2 ring-inset ring-blue-600" : ""
                                     }`}
                                   >
                                     {monthItem.label}
                                   </th>
                                 ))}
-                                <th className="w-[84px] rounded-r-2xl border border-slate-200 bg-slate-900 px-2 py-2.5 text-right text-[10px] uppercase tracking-[0.16em] text-white">
+                                <th className="w-[84px] border-b border-slate-300 bg-slate-200 px-3 py-3 text-right text-[10px] uppercase tracking-[0.14em] text-slate-700">
                                   Total
                                 </th>
                               </tr>
@@ -10582,9 +10544,22 @@ export function FinanceApp() {
                                   {section === "Contas" ? (
                                     <tr>
                                       <td colSpan={salaryCalendarMonths.length + 2} className="border-0 bg-transparent px-0 py-1.5">
-                                        <div className="flex items-center justify-between rounded-2xl bg-white/70 px-3 py-2">
-                                          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                                        <div
+                                          className={`flex items-center justify-between rounded-xl border px-3 py-2 ${
+                                            group.key === "Contas fixas"
+                                              ? "border-blue-200 bg-blue-50 text-blue-700"
+                                              : group.key === "Dividas e acordos"
+                                                ? "border-orange-200 bg-orange-50 text-orange-700"
+                                                : group.key === "Compras planejadas"
+                                                  ? "border-violet-200 bg-violet-50 text-violet-700"
+                                                  : "border-sky-200 bg-sky-50 text-sky-700"
+                                          }`}
+                                        >
+                                          <span className="text-[10px] font-semibold uppercase tracking-[0.14em]">
                                             {group.key}
+                                          </span>
+                                          <span className="text-[10px] font-semibold">
+                                            {group.rows.length} itens
                                           </span>
                                         </div>
                                       </td>
@@ -10593,7 +10568,7 @@ export function FinanceApp() {
                                   {group.rows.map((row) => (
                                 <Fragment key={row.id}>
                                 <tr className="align-top">
-                                  <th className="sticky left-0 z-20 w-[180px] border border-slate-200 bg-white p-1.5 text-left">
+                                  <th className="sticky left-0 z-20 w-[180px] border-b border-r border-slate-200 bg-white p-1.5 text-left">
                                     <div
                                       role="button"
                                       tabIndex={0}
@@ -10604,7 +10579,7 @@ export function FinanceApp() {
                                           openMonthlyGridRowModal(row);
                                         }
                                       }}
-                                      className="grid min-h-[64px] w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-[16px] bg-white px-2 py-2 text-left shadow-sm ring-1 ring-transparent transition duration-200 hover:-translate-y-0.5 hover:shadow-md hover:ring-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-200"
+                                      className="grid min-h-[64px] w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-left shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-sky-200"
                                       aria-label={`Editar ${row.title}`}
                                     >
                                       <span className="min-w-0">
@@ -10626,7 +10601,7 @@ export function FinanceApp() {
                                             onKeyDown={(event) => {
                                               event.stopPropagation();
                                             }}
-                                            className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-50 text-rose-600 transition hover:bg-rose-100 focus:outline-none focus:ring-2 focus:ring-rose-200"
+                                            className="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-50 text-rose-600 transition hover:bg-rose-100 focus:outline-none focus:ring-2 focus:ring-rose-200"
                                             aria-label={`Excluir ${row.title}`}
                                           >
                                             <Trash2 className="h-3.5 w-3.5" />
@@ -10652,7 +10627,7 @@ export function FinanceApp() {
                                                 }));
                                               }
                                             }}
-                                            className="flex h-7 w-7 items-center justify-center rounded-full bg-sky-50 text-sky-700 transition hover:bg-sky-100"
+                                            className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-50 text-sky-700 transition hover:bg-sky-100"
                                             aria-label={expandedCardBillRows[row.sourceId] ? "Recolher fatura" : "Expandir fatura"}
                                           >
                                             {expandedCardBillRows[row.sourceId] ? (
@@ -10679,8 +10654,8 @@ export function FinanceApp() {
                                     return (
                                       <td
                                         key={monthItem.monthValue}
-                                        className={`border border-slate-200 bg-white p-1 ${
-                                          monthItem.monthValue === selectedMonth ? "bg-sky-100/80 ring-1 ring-sky-200" : ""
+                                        className={`border-b border-r border-slate-200 bg-white p-1 ${
+                                          monthItem.monthValue === selectedMonth ? "bg-sky-50/80 ring-1 ring-inset ring-sky-200" : ""
                                         }`}
                                         onDragOver={(event) => {
                                           if (draggedGridCell?.rowId === row.id && !isCardAutoBillRow) {
@@ -10712,17 +10687,17 @@ export function FinanceApp() {
                                                 : undefined
                                             }
                                             onDragEnd={endMonthlyGridDrag}
-                                            onClick={() => openMonthlyGridCardModal(row, monthItem.monthValue)}
-                                            className={`flex h-full min-h-[72px] w-full flex-col justify-between rounded-[18px] px-2 py-2 text-left transition ${
+                                            onClick={() => openMonthlyGridCellEditor(row, monthItem.monthValue)}
+                                            className={`flex h-full min-h-[72px] w-full flex-col justify-between rounded-xl border px-2 py-2 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] transition duration-150 ${
                                               amount <= 0
-                                                ? "bg-slate-50 text-slate-300 hover:bg-slate-100"
+                                                ? "border-slate-100 bg-slate-50/70 text-slate-300 hover:border-slate-200 hover:bg-white"
                                                 : isRealPurchase
                                                   ? isCompleted
-                                                    ? "cursor-grab bg-emerald-100 text-emerald-800 hover:bg-emerald-200 active:cursor-grabbing"
-                                                    : "cursor-grab bg-emerald-50 text-emerald-700 hover:bg-emerald-100 active:cursor-grabbing"
+                                                    ? "cursor-grab border-emerald-200 bg-emerald-50 text-emerald-800 hover:border-emerald-300 hover:bg-emerald-100 active:cursor-grabbing"
+                                                    : "cursor-grab border-emerald-100 bg-white text-emerald-700 hover:border-emerald-200 hover:bg-emerald-50 active:cursor-grabbing"
                                                   : isCompleted
-                                                    ? "cursor-grab bg-violet-100 text-violet-800 hover:bg-violet-200 active:cursor-grabbing"
-                                                    : "cursor-grab bg-violet-50 text-violet-700 hover:bg-violet-100 active:cursor-grabbing"
+                                                    ? "cursor-grab border-violet-200 bg-violet-50 text-violet-800 hover:border-violet-300 hover:bg-violet-100 active:cursor-grabbing"
+                                                    : "cursor-grab border-violet-100 bg-white text-violet-700 hover:border-violet-200 hover:bg-violet-50 active:cursor-grabbing"
                                             } ${selectedMonthCellClass}`}
                                           >
                                             <input
@@ -10738,9 +10713,9 @@ export function FinanceApp() {
                                               }
                                               inputMode="decimal"
                                               placeholder="0"
-                                              className="w-full bg-transparent text-[11px] font-semibold leading-tight outline-none placeholder:text-current/40"
+                                              className="w-full bg-transparent text-[11px] font-semibold leading-tight tabular-nums outline-none placeholder:text-current/40"
                                             />
-                                            <span className="text-[9px] font-semibold uppercase tracking-[0.12em]">
+                                            <span className="mt-2 w-fit rounded-md border border-current/10 bg-white/75 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.12em]">
                                               {amount <= 0 ? "Sem valor" : isRealPurchase ? (row.paymentMethod === "pix" ? "Pix" : row.paymentMethod === "debit_card" ? "Debito" : "Abrir") : "Abrir"}
                                             </span>
                                           </div>
@@ -10750,12 +10725,12 @@ export function FinanceApp() {
                                             onClick={() =>
                                               openCardBillComparison(row.sourceId, monthItem.monthValue)
                                             }
-                                            className={`flex min-h-[72px] w-full cursor-pointer flex-col justify-between rounded-[18px] px-2 py-2 text-left transition ${
+                                            className={`flex min-h-[72px] w-full cursor-pointer flex-col justify-between rounded-xl border px-2 py-2 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] transition duration-150 ${
                                               amount <= 0
-                                                ? "bg-slate-50 text-slate-300 hover:bg-slate-100"
+                                                ? "border-slate-100 bg-slate-50/70 text-slate-300 hover:border-slate-200 hover:bg-white"
                                                 : isCompleted
-                                                  ? "bg-sky-100 text-sky-800 hover:bg-sky-200"
-                                                  : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                                                  ? "border-sky-200 bg-sky-50 text-sky-800 hover:border-sky-300 hover:bg-sky-100"
+                                                  : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white"
                                             } ${selectedMonthCellClass}`}
                                           >
                                             <input
@@ -10767,7 +10742,7 @@ export function FinanceApp() {
                                               }
                                               inputMode="decimal"
                                               placeholder="0"
-                                              className="w-full bg-transparent text-[11px] font-semibold leading-tight outline-none placeholder:text-current/40"
+                                              className="w-full bg-transparent text-[11px] font-semibold leading-tight tabular-nums outline-none placeholder:text-current/40"
                                             />
                                             {cardBillEstimate && !cardBillEstimate.isAutoEstimate ? (
                                               <div className="mt-2 flex flex-wrap gap-1">
@@ -10797,17 +10772,17 @@ export function FinanceApp() {
                                                 : undefined
                                             }
                                             onDragEnd={endMonthlyGridDrag}
-                                            onClick={() => openMonthlyGridCardModal(row, monthItem.monthValue)}
-                                            className={`flex h-full min-h-[72px] w-full flex-col justify-between rounded-[18px] px-2 py-2 transition ${
+                                            onClick={() => openMonthlyGridCellEditor(row, monthItem.monthValue)}
+                                            className={`flex h-full min-h-[72px] w-full flex-col justify-between rounded-xl border px-2 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] transition duration-150 ${
                                               amount <= 0
-                                                ? "bg-slate-50 text-slate-300"
+                                                ? "border-slate-100 bg-slate-50/70 text-slate-300 hover:border-slate-200 hover:bg-white"
                                                 : isCompleted
                                                   ? row.section === "Ganhos"
-                                                    ? "cursor-grab bg-emerald-100 text-emerald-800 active:cursor-grabbing"
-                                                    : "cursor-grab bg-sky-100 text-sky-800 active:cursor-grabbing"
+                                                    ? "cursor-grab border-emerald-200 bg-emerald-50 text-emerald-800 hover:border-emerald-300 hover:bg-emerald-100 active:cursor-grabbing"
+                                                    : "cursor-grab border-sky-200 bg-sky-50 text-sky-800 hover:border-sky-300 hover:bg-sky-100 active:cursor-grabbing"
                                                   : row.section === "Ganhos"
-                                                    ? "cursor-grab bg-emerald-50 text-emerald-700 active:cursor-grabbing"
-                                                    : "cursor-grab bg-rose-50 text-rose-700 active:cursor-grabbing"
+                                                    ? "cursor-grab border-emerald-100 bg-white text-emerald-700 hover:border-emerald-200 hover:bg-emerald-50 active:cursor-grabbing"
+                                                    : "cursor-grab border-rose-100 bg-white text-rose-700 hover:border-rose-200 hover:bg-rose-50 active:cursor-grabbing"
                                             } ${selectedMonthCellClass}`}
                                           >
                                             <div className="flex items-start justify-between">
@@ -10820,7 +10795,7 @@ export function FinanceApp() {
                                                 }
                                                 inputMode="decimal"
                                                 placeholder="0"
-                                                className="w-full bg-transparent text-[11px] font-semibold leading-tight outline-none placeholder:text-current/40"
+                                                className="w-full bg-transparent text-[11px] font-semibold leading-tight tabular-nums outline-none placeholder:text-current/40"
                                               />
                                               {row.sourceType === "fixed" && amount > 0 ? (
                                                 <button
@@ -10840,7 +10815,7 @@ export function FinanceApp() {
                                                 </button>
                                               ) : null}
                                             </div>
-                                            <span className="mt-2 rounded-full bg-white/70 px-2 py-1 text-left text-[9px] font-semibold uppercase tracking-[0.12em]">
+                                            <span className="mt-2 w-fit rounded-md border border-current/10 bg-white/75 px-1.5 py-0.5 text-left text-[8px] font-bold uppercase tracking-[0.12em]">
                                               {amount <= 0 ? "Sem valor" : "Abrir"}
                                             </span>
                                           </div>
@@ -10848,8 +10823,8 @@ export function FinanceApp() {
                                       </td>
                                     );
                                   })}
-                                  <td className="border border-slate-200 bg-white px-2 py-2.5 text-right">
-                                    <p className="text-[11px] font-semibold text-slate-900">
+                                  <td className="border-b border-slate-200 bg-white px-3 py-2.5 text-right">
+                                    <p className="text-[11px] font-semibold tabular-nums text-slate-900">
                                       {formatCurrency(
                                         salaryCalendarMonths.reduce((sum, monthItem) => sum + (row.amountByMonth[monthItem.monthValue] ?? 0), 0),
                                       )}
@@ -10944,8 +10919,14 @@ export function FinanceApp() {
 
                                           return (
                                             <tr key={`${row.id}-${item.id}`} className="align-top">
-                                              <th className="sticky left-0 z-20 w-[180px] border border-slate-200 bg-white px-2 py-2.5 text-left">
-                                                <div className={`rounded-xl px-1 py-1 ${isItemSelected ? "bg-violet-50" : ""}`}>
+                                              <th className="sticky left-0 z-20 w-[180px] border-b border-r border-slate-200 bg-slate-50/80 px-2 py-2.5 text-left">
+                                                <div className={`rounded-xl border px-2 py-2 shadow-sm transition ${
+                                                  isItemSelected
+                                                    ? "border-violet-200 bg-violet-50"
+                                                    : itemGroup
+                                                      ? "border-violet-100 bg-white"
+                                                      : "border-slate-200 bg-white"
+                                                }`}>
                                                   <div className="flex items-start gap-2">
                                                     {selectableTransactionId || selectableBillGroupId ? (
                                                       <input
@@ -10987,7 +10968,7 @@ export function FinanceApp() {
                                                             <button
                                                               type="button"
                                                               onClick={() => setExpandedGroupId(null)}
-                                                              className="rounded-full bg-violet-50 p-1 text-violet-600 transition hover:bg-violet-100"
+                                                              className="rounded-lg bg-violet-50 p-1 text-violet-600 transition hover:bg-violet-100"
                                                               aria-label="Recolher grupo"
                                                             >
                                                               <ChevronUp className="h-3.5 w-3.5" />
@@ -10996,8 +10977,8 @@ export function FinanceApp() {
                                                         </div>
                                                       )}
                                                       {itemGroup && (
-                                                        <span className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-medium text-violet-700">
-                                                          📦 {itemGroup.nome}
+                                                        <span className="mt-1 inline-flex items-center gap-1 rounded-md border border-violet-100 bg-violet-50 px-1.5 py-0.5 text-[9px] font-semibold text-violet-700">
+                                                          {itemGroup.nome}
                                                         </span>
                                                       )}
                                                       <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">
@@ -11012,21 +10993,23 @@ export function FinanceApp() {
                                             return (
                                               <td
                                                 key={`${row.id}-${item.id}-${monthItem.monthValue}`}
-                                                className={`border border-slate-200 bg-white p-1 ${
-                                                  monthItem.monthValue === selectedMonth ? "ring-1 ring-sky-200" : ""
+                                                className={`border-b border-r border-slate-200 bg-white p-1 ${
+                                                  monthItem.monthValue === selectedMonth ? "bg-sky-50/80 ring-1 ring-inset ring-sky-200" : ""
                                                 }`}
                                               >
                                                 <div
-                                                  className={`flex min-h-[54px] w-full flex-col justify-between rounded-[16px] px-2 py-2 text-left transition ${
+                                                  className={`flex min-h-[54px] w-full flex-col justify-between rounded-xl border px-2 py-2 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] transition duration-150 ${
                                                     itemAmount === 0
-                                                      ? "cursor-default bg-white/60 text-slate-300"
+                                                      ? "cursor-default border-slate-100 bg-slate-50/70 text-slate-300"
                                                       : itemAmount < 0
-                                                        ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                                                        : "bg-rose-50 text-rose-700 hover:bg-rose-100"
+                                                        ? "border-emerald-100 bg-white text-emerald-700 hover:border-emerald-200 hover:bg-emerald-50"
+                                                        : isGroupSummary
+                                                          ? "border-violet-100 bg-violet-50 text-violet-700 hover:border-violet-200 hover:bg-violet-100"
+                                                          : "border-rose-100 bg-white text-rose-700 hover:border-rose-200 hover:bg-rose-50"
                                                   }`}
                                                 >
                                                   {isGroupSummary ? (
-                                                    <span className="text-[11px] font-semibold leading-tight">
+                                                    <span className="text-[11px] font-semibold leading-tight tabular-nums">
                                                       {itemAmount > 0 ? formatCurrency(itemAmount) : "0"}
                                                     </span>
                                                   ) : (
@@ -11042,7 +11025,7 @@ export function FinanceApp() {
                                                       }
                                                       inputMode="decimal"
                                                       placeholder="0"
-                                                      className="w-full bg-transparent text-[11px] font-semibold leading-tight outline-none placeholder:text-current/40"
+                                                      className="w-full bg-transparent text-[11px] font-semibold leading-tight tabular-nums outline-none placeholder:text-current/40"
                                                     />
                                                   )}
                                                   <button
@@ -11053,7 +11036,7 @@ export function FinanceApp() {
                                                         : openCardDetails(row.sourceId, monthItem.monthValue)
                                                     }
                                                     disabled={itemAmount === 0}
-                                                    className="mt-1 w-fit text-[9px] font-semibold uppercase tracking-[0.12em] transition hover:opacity-75 disabled:cursor-default disabled:opacity-60"
+                                                    className="mt-1 w-fit rounded-md border border-current/10 bg-white/75 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.12em] transition hover:opacity-75 disabled:cursor-default disabled:opacity-60"
                                                   >
                                                     {itemAmount !== 0 ? (isGroupSummary ? "Expandir" : "Abrir") : "Sem valor"}
                                                   </button>
@@ -11061,8 +11044,8 @@ export function FinanceApp() {
                                               </td>
                                             );
                                           })}
-                                          <td className="border border-slate-200 bg-white px-2 py-2.5 text-right">
-                                            <p className="text-[11px] font-semibold text-slate-900">
+                                          <td className="border-b border-slate-200 bg-white px-3 py-2.5 text-right">
+                                            <p className="text-[11px] font-semibold tabular-nums text-slate-900">
                                               {formatCurrency(rowTotal)}
                                             </p>
                                           </td>
@@ -11077,20 +11060,20 @@ export function FinanceApp() {
                                 </Fragment>
                               ))}
                               <tr className="align-top">
-                                <th className="sticky left-0 z-30 w-[180px] rounded-bl-2xl border border-slate-200 bg-slate-900 px-2 py-2.5 text-left text-[10px] uppercase tracking-[0.16em] text-white">
+                                <th className="sticky left-0 z-30 w-[180px] border-r border-t border-slate-200 bg-slate-900 px-3 py-3 text-left text-[10px] uppercase tracking-[0.16em] text-white">
                                   Soma
                                 </th>
                                 {sectionMonthlyTotals.map((amount, index) => (
                                   <td
                                     key={`${section}-total-${salaryCalendarMonths[index].monthValue}`}
-                                    className={`border border-slate-200 bg-slate-900 px-1 py-2.5 text-center text-[10px] font-semibold text-white ${
+                                    className={`border-r border-t border-slate-200 bg-slate-900 px-1 py-3 text-center text-[10px] font-semibold tabular-nums text-white ${
                                       salaryCalendarMonths[index].monthValue === selectedMonth ? "bg-sky-200 text-sky-950" : ""
                                     }`}
                                   >
                                     {amount > 0 ? formatCurrency(amount) : "-"}
                                   </td>
                                 ))}
-                                <td className="rounded-br-2xl border border-slate-200 bg-slate-900 px-2 py-2.5 text-right text-[10px] font-semibold text-white">
+                                <td className="border-t border-slate-200 bg-slate-900 px-3 py-3 text-right text-[10px] font-semibold tabular-nums text-white">
                                   {formatCurrency(sectionTotal)}
                                 </td>
                               </tr>
@@ -11105,7 +11088,6 @@ export function FinanceApp() {
             </Panel>
 
           {renderMonthlyGridDeleteConfirmModal()}
-          {renderMonthlyGridCardModal()}
           {renderCardBillComparisonModal()}
           {renderCommitmentModal()}
           {renderFixedEntryModal()}
@@ -12302,187 +12284,6 @@ export function FinanceApp() {
               <Trash2 className="mr-1 inline h-4 w-4" />
               Excluir
             </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  function renderMonthlyGridCardModal() {
-    if (!selectedMonthlyGridCard) {
-      return null;
-    }
-
-    const row = monthlyGridRows.find((item) => item.id === selectedMonthlyGridCard.rowId);
-    if (!row) {
-      return null;
-    }
-
-    const monthValue = selectedMonthlyGridCard.monthValue;
-    const amount = row.amountByMonth[monthValue] ?? 0;
-    const isCompleted = row.completedMonths.includes(monthValue);
-    const fixedEntry = row.sourceType === "fixed"
-      ? fixedEntries.find((item) => item.id === row.sourceId)
-      : undefined;
-    const plannedPurchase = row.sourceType === "planned_purchase"
-      ? plannedPurchases.find((item) => item.id === row.sourceId)
-      : undefined;
-    const entryKind = fixedEntry?.kind ?? (row.section === "Ganhos" ? "income" : "expense");
-    const accountName = row.accountId
-      ? accounts.find((account) => account.id === row.accountId)?.name
-      : undefined;
-    const cardName = row.cardId ? cards.find((card) => card.id === row.cardId)?.name : undefined;
-    const paymentLabel = paymentLabels[row.paymentMethod];
-    const purchasePaymentLabel = plannedPurchase?.plannedPaymentMethod
-      ? getPlannedPaymentDetails(
-          plannedPurchase.plannedPaymentMethod,
-          plannedPurchase.plannedCardId,
-          plannedPurchase.plannedCardMode ?? "credit",
-          cards,
-        ).label
-      : undefined;
-    const bill = bills.find((item) => item.id === row.sourceId);
-    const linkedDebtId = row.linkedDebtId;
-    const originLabel =
-      row.sourceType === "planned_purchase"
-        ? "Compra planejada"
-        : linkedDebtId
-          ? "Planejamento de divida"
-        : bill
-          ? "Conta a pagar"
-        : row.linkedBillGroupId
-          ? "Valor fixo sincronizado com Contas"
-          : "Valor fixo recorrente";
-
-    return renderGlobalModal(
-      <div className="fixed inset-0 z-[1000] flex min-h-dvh w-screen items-center justify-center overflow-y-auto bg-slate-950/38 px-4 py-8 backdrop-blur-sm">
-        <div className="flex max-h-[86vh] w-full max-w-2xl flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_32px_120px_rgba(15,23,42,0.24)]">
-          <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
-            <div>
-              <p className="text-xs uppercase tracking-[0.24em] text-sky-600">
-                Detalhe do card
-              </p>
-              <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                {row.title}
-              </h3>
-              <p className="mt-2 text-sm text-slate-500">
-                {formatMonthLabel(monthValueToDate(monthValue))}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={closeMonthlyGridCardModal}
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-600 transition hover:bg-slate-200"
-              aria-label="Fechar modal"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-
-          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <InfoBlock label="Secao" value={fixedSectionDisplayLabels[normalizeFixedSection(row.section)]} />
-              <InfoBlock label="Valor do mes" value={amount > 0 ? formatCurrency(amount) : "Sem valor"} />
-              <InfoBlock
-                label="Status"
-                value={
-                  amount <= 0
-                    ? "Sem lancamento"
-                    : isCompleted
-                      ? entryKind === "income"
-                        ? "Entrou"
-                        : "Pago"
-                      : entryKind === "income"
-                        ? "Pendente de entrada"
-                        : "Pendente"
-                }
-              />
-              <InfoBlock label="Origem" value={originLabel} />
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
-                <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Categoria</p>
-                <p className="mt-2 text-sm font-semibold text-slate-900">
-                  {getDisplayCategoryName(row.categoryId, row.categoryName)}
-                </p>
-              </div>
-              <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
-                <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Pagamento</p>
-                <p className="mt-2 text-sm font-semibold text-slate-900">
-                  {row.sourceType === "planned_purchase" ? purchasePaymentLabel ?? "Nao definido" : paymentLabel}
-                </p>
-                {cardName ? <p className="mt-1 text-xs text-slate-500">Cartao {cardName}</p> : null}
-                {accountName ? <p className="mt-1 text-xs text-slate-500">Conta {accountName}</p> : null}
-              </div>
-            </div>
-
-            {row.linkedBillGroupId ? (
-              <div className="rounded-[24px] border border-sky-100 bg-sky-50 px-4 py-4 text-sm text-sky-800">
-                Este item esta sincronizado com a area de Contas. Ajustes estruturais refletem nos dois lados.
-              </div>
-            ) : null}
-
-            {row.linkedDebtId ? (
-              <div className="rounded-[24px] border border-amber-100 bg-amber-50 px-4 py-4 text-sm text-amber-800">
-                Este item veio do planejamento de uma divida e permanece vinculado a ela na area de Contas.
-              </div>
-            ) : null}
-
-            {row.sourceType === "planned_purchase" && plannedPurchase ? (
-              <div className="rounded-[24px] border border-violet-100 bg-violet-50 px-4 py-4">
-                <p className="text-[11px] uppercase tracking-[0.22em] text-violet-500">Compra planejada</p>
-                <p className="mt-2 text-sm font-semibold text-slate-900">
-                  {getPurchasePlanningLabel(plannedPurchase)}
-                </p>
-                <p className="mt-1 text-sm text-slate-600">
-                  Alvo: {getPurchasePlacementLabel(plannedPurchase)}
-                </p>
-                {plannedPurchase.plannedInstallments ? (
-                  <p className="mt-1 text-xs text-slate-500">
-                    Parcelas: {plannedPurchase.plannedInstallments}x
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-
-            {row.notes ? (
-              <div className="rounded-[24px] border border-slate-200 bg-white px-4 py-4">
-                <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Observacoes</p>
-                <p className="mt-2 text-sm text-slate-700">{row.notes}</p>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-6 py-5">
-            <p className="max-w-md text-xs font-medium text-slate-500">
-              A planilha edita previsao e valor. A confirmacao de pagamento vem pela importacao e reconciliacao do extrato.
-            </p>
-            <div className="flex flex-wrap justify-end gap-3">
-            {linkedDebtId ? (
-              <button
-                type="button"
-                onClick={() => {
-                  handleDeleteDebt(linkedDebtId);
-                  closeMonthlyGridCardModal();
-                }}
-                className="rounded-2xl border border-red-200 px-4 py-3 text-sm font-semibold text-red-600 transition hover:bg-red-50"
-              >
-                <Trash2 className="mr-1 inline h-4 w-4" />
-                Excluir divida
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => {
-                openCommitmentEditorFromGrid(row, monthValue);
-                closeMonthlyGridCardModal();
-              }}
-              className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-            >
-              Abrir edicao completa
-            </button>
-            </div>
           </div>
         </div>
       </div>
@@ -16595,6 +16396,61 @@ export function FinanceApp() {
               </Panel>
             ) : null}
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderReconciliationWorkspace() {
+    const plannedSurplus = fixedMonthPlannedIncome - fixedMonthPlannedExpense;
+
+    return (
+      <div className="space-y-4">
+        <Panel title="Real vs Planejado" description="">
+          <div className="grid gap-3 md:grid-cols-4">
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+              <p className="text-sm font-semibold text-slate-500">Ganhos planejados</p>
+              <p className="mt-2 text-xl font-semibold text-emerald-600">
+                {formatCurrency(fixedMonthPlannedIncome)}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+              <p className="text-sm font-semibold text-slate-500">Gastos planejados</p>
+              <p className="mt-2 text-xl font-semibold text-rose-600">
+                {formatCurrency(fixedMonthPlannedExpense)}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+              <p className="text-sm font-semibold text-slate-500">Sobra planejada</p>
+              <p className={`mt-2 text-xl font-semibold ${plannedSurplus >= 0 ? "text-blue-600" : "text-rose-600"}`}>
+                {formatCurrency(plannedSurplus)}
+              </p>
+            </div>
+            <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-4">
+              <p className="text-sm font-semibold text-blue-700">Proxima etapa</p>
+              <p className="mt-2 text-sm font-medium text-blue-900">
+                Comparar com transacoes reais e uso da sobra.
+              </p>
+            </div>
+          </div>
+        </Panel>
+
+        <div className="grid gap-4 xl:grid-cols-3">
+          <Panel title="Diferencas do planejado" description="">
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm font-medium text-slate-500">
+              Aqui entram contas, faturas, ganhos e dividas planejadas que vierem com valor diferente do real.
+            </div>
+          </Panel>
+          <Panel title="Uso da sobra" description="">
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm font-medium text-slate-500">
+              Aqui entram os gastos livres que nao pertencem aos planejados.
+            </div>
+          </Panel>
+          <Panel title="Analise dos planejados" description="">
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm font-medium text-slate-500">
+              Aqui entram graficos por categoria, cartao, tipo e mes.
+            </div>
+          </Panel>
         </div>
       </div>
     );

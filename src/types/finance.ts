@@ -4,6 +4,7 @@ export type ViewId =
   | "home"
   | "transactions"
   | "history"
+  | "reconciliation"
   | "settings";
 
 export type FinancePriority = "Urgente" | "Alta" | "Média" | "Baixa" | "Adiável";

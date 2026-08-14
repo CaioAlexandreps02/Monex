@@ -16,10 +16,11 @@ import type {
 } from "@/types/finance";
 
 import {
-  LayoutDashboard,
   ArrowLeftRight,
   BarChart3,
+  GitCompareArrows,
   Settings as SettingsIcon,
+  Table2,
 } from "lucide-react";
 
 export const referenceDate = "2026-04-14";
@@ -88,10 +89,10 @@ function createAmountMap(entries: Array<[string, number]>) {
 export const navItems: NavItem[] = [
   {
     id: "home",
-    label: "Home",
-    shortLabel: "Home",
+    label: "Planilha",
+    shortLabel: "Planilha",
     description: "Planilha principal, planejamento e contas futuras",
-    icon: LayoutDashboard,
+    icon: Table2,
   },
   {
     id: "transactions",
@@ -102,10 +103,17 @@ export const navItems: NavItem[] = [
   },
   {
     id: "history",
-    label: "Historico",
-    shortLabel: "Passado",
+    label: "Relatorios",
+    shortLabel: "Relatorios",
     description: "Analise historica de gastos, categorias e tendencias",
     icon: BarChart3,
+  },
+  {
+    id: "reconciliation",
+    label: "Conciliacao",
+    shortLabel: "Conciliacao",
+    description: "Compare planejamento, realidade e diferencas do mes",
+    icon: GitCompareArrows,
   },
   {
     id: "settings",

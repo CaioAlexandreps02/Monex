@@ -4,7 +4,17 @@ import type { FinancePriority, ViewId } from "@/types/finance";
 
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, type LucideIcon } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  CircleDollarSign,
+  CreditCard,
+  FileDown,
+  LayoutList,
+  Target,
+  Wallet,
+  type LucideIcon,
+} from "lucide-react";
 
 export type CustomSelectOption = {
   value: string;
@@ -162,45 +172,95 @@ const priorityClasses: Record<string, string> = {
 export function NavigationRail({
   activeView,
   onNavigate,
+  activeHomeTab = "grid",
+  onHomeTabNavigate,
 }: {
   activeView: ViewId;
   onNavigate: (viewId: ViewId) => void;
+  activeHomeTab?: string;
+  onHomeTabNavigate?: (tabId: "grid" | "planning" | "accounts" | "cards" | "imports") => void;
 }) {
+  const planilhaSubItems: Array<{
+    id: "grid" | "planning" | "accounts" | "cards" | "imports";
+    label: string;
+    icon: LucideIcon;
+  }> = [
+    { id: "grid", label: "Resumo", icon: LayoutList },
+    { id: "planning", label: "Planejamento", icon: Target },
+    { id: "accounts", label: "Contas", icon: Wallet },
+    { id: "cards", label: "Cartoes", icon: CreditCard },
+    { id: "imports", label: "Importar", icon: FileDown },
+  ];
+
   return (
-    <aside className="relative z-30 hidden w-[268px] shrink-0 pointer-events-auto lg:block">
-      <div className="sticky top-6 z-30 rounded-[32px] bg-gradient-to-b from-[#0f56be] via-[#1d63cf] to-[#163878] p-4 text-white shadow-[0_24px_80px_rgba(16,63,145,0.32)]">
-        <div className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
-          <div className="flex items-center justify-center">
+    <aside className="relative z-30 hidden w-[180px] shrink-0 pointer-events-auto lg:block">
+      <div className="sticky top-0 z-30 flex min-h-screen flex-col border-r border-slate-950/10 bg-[#08275f] px-3 py-5 text-white shadow-[12px_0_40px_rgba(8,39,95,0.12)]">
+        <div className="border-b border-white/12 pb-5">
+          <div className="flex items-center">
             <Image
               src="/branding/monex-logo.png"
               alt="Monex"
-              width={180}
+              width={134}
               height={44}
-              className="h-11 w-auto object-contain"
+              className="h-9 w-auto rounded-xl bg-white px-2 py-1 object-contain"
               priority
             />
           </div>
         </div>
 
-        <nav className="mt-5 space-y-2">
+        <nav className="mt-5 flex-1 space-y-1">
           {navItems.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onNavigate(item.id)}
-              aria-pressed={activeView === item.id}
-              className={`flex w-full items-center gap-3 rounded-2xl px-4 py-2.5 text-left text-sm transition ${
-                activeView === item.id
-                  ? "bg-white text-slate-950 shadow-[0_20px_40px_rgba(255,255,255,0.18)]"
-                  : "bg-white/8 text-white/82 hover:bg-white/14"
-              }`}
-            >
-              {item.icon && <item.icon className="h-[18px] w-[18px] shrink-0" />}
-              <span className="font-semibold">{item.label}</span>
-            </button>
+            <div key={item.id}>
+              <button
+                type="button"
+                onClick={() => onNavigate(item.id)}
+                aria-pressed={activeView === item.id}
+                className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition ${
+                  activeView === item.id
+                    ? "bg-white text-blue-700 shadow-sm"
+                    : "text-white/74 hover:bg-white/10 hover:text-white"
+                }`}
+              >
+                {item.icon && <item.icon className="h-[17px] w-[17px] shrink-0" />}
+                <span className="font-semibold">{item.label}</span>
+                {item.id === "home" ? (
+                  <ChevronDown
+                    className={`ml-auto h-4 w-4 transition ${activeView === "home" ? "rotate-180" : ""}`}
+                  />
+                ) : null}
+              </button>
+
+              {item.id === "home" && activeView === "home" ? (
+                <div className="mt-2 space-y-1 border-l border-white/14 pl-3">
+                  {planilhaSubItems.map((subItem) => (
+                    <button
+                      key={subItem.id}
+                      type="button"
+                      onClick={() => onHomeTabNavigate?.(subItem.id)}
+                      aria-pressed={activeHomeTab === subItem.id}
+                      className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold transition ${
+                        activeHomeTab === subItem.id
+                          ? "bg-blue-500 text-white"
+                          : "text-white/68 hover:bg-white/10 hover:text-white"
+                      }`}
+                    >
+                      <subItem.icon className="h-3.5 w-3.5 shrink-0" />
+                      {subItem.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           ))}
         </nav>
 
+        <button
+          type="button"
+          className="mt-5 flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-white/70 transition hover:bg-white/10 hover:text-white"
+        >
+          <CircleDollarSign className="h-4 w-4" />
+          Recolher
+        </button>
       </div>
     </aside>
   );
@@ -250,13 +310,17 @@ export function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="min-w-0 max-w-full overflow-hidden rounded-[30px] border border-white/70 bg-white/85 p-5 shadow-[0_22px_60px_rgba(31,58,126,0.08)] backdrop-blur">
-      <div className="mb-5 flex items-start justify-between gap-4">
-        <div>
-          <p className="text-xl font-semibold tracking-tight text-slate-950">{title}</p>
+    <section className="min-w-0 max-w-full overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)]">
+      {title || action ? (
+        <div className="mb-4 flex items-start justify-between gap-4">
+          {title ? (
+            <div>
+              <p className="text-lg font-semibold tracking-tight text-slate-950">{title}</p>
+            </div>
+          ) : null}
+          {action ? <div className="shrink-0">{action}</div> : null}
         </div>
-        {action ? <div className="shrink-0">{action}</div> : null}
-      </div>
+      ) : null}
       {children}
     </section>
   );

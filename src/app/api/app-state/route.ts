@@ -4,7 +4,7 @@ import { loadRelationalFinanceState, saveRelationalFinanceState } from "@/lib/mo
 
 const APP_STATE_KEY = "default";
 const SUPABASE_REQUEST_TIMEOUT_MS = 12000;
-const APP_STATE_SOURCE = process.env.MONEX_APP_STATE_SOURCE ?? "json";
+const APP_STATE_SOURCE = process.env.MONEX_APP_STATE_SOURCE ?? "relational";
 
 function getSupabaseConfig() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;

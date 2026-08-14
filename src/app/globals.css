@@ -66,11 +66,11 @@ body {
 
 .field {
   width: 100%;
-  border-radius: 1rem;
+  border-radius: 0.75rem;
   border: 1px solid rgba(203, 213, 225, 0.85);
-  background: rgba(248, 250, 252, 0.9);
+  background: rgba(255, 255, 255, 0.94);
   color: #0f172a;
-  padding: 0.8rem 1rem;
+  padding: 0.68rem 0.85rem;
   outline: none;
   transition:
     border-color 160ms ease,
