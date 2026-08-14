@@ -253,6 +253,7 @@ type DraftDebt = {
   description: string;
   totalAmount: string;
   paidAmount: string;
+  installments: string;
   installmentAmount: string;
   nextDueDate: string;
   priority: FinancePriority;
@@ -583,6 +584,7 @@ const initialDraftDebt: DraftDebt = {
   description: "",
   totalAmount: "",
   paidAmount: "0",
+  installments: "1",
   installmentAmount: "",
   nextDueDate: `${initialMonth}-28`,
   priority: "Alta",
@@ -3886,10 +3888,13 @@ export function FinanceApp() {
   }, [hasLoadedPersistedState, investments, categories, salaryCalendarMonths, settings.defaultAccountId]);
 
   const buildFixedEntryFromDebt = useCallback((debt: Debt, existingEntry?: FixedFlowEntry): FixedFlowEntry | null => {
-    const debtCategory =
+    const fallbackDebtCategory =
       categories.find((item) => item.id === defaultBillCategoryId) ??
       categories.find((item) => item.type === "expense") ??
       categories[0];
+    const debtCategory =
+      categories.find((item) => item.id === existingEntry?.categoryId) ??
+      fallbackDebtCategory;
 
     if (!debtCategory || debt.remainingAmount <= 0 || debt.status === "settled") {
       return null;
@@ -3897,32 +3902,35 @@ export function FinanceApp() {
 
     const startMonth = debt.nextDueDate.slice(0, 7) || selectedMonth;
     const installmentAmount = Math.max(0.01, debt.installmentAmount || debt.remainingAmount);
-    const monthCount = Math.max(1, Math.ceil(debt.remainingAmount / installmentAmount));
+    const monthCount = Math.max(
+      1,
+      (debt.totalInstallments || 0) - (debt.paidInstallments || 0) ||
+        Math.ceil(debt.remainingAmount / installmentAmount),
+    );
     const { schedule } = buildDebtPlanSchedule(
       startMonth,
       debt.remainingAmount,
       monthCount,
       installmentAmount,
     );
-    const existingHasSchedule = Object.values(existingEntry?.amountByMonth ?? {}).some((amount) => amount > 0);
-    const amountByMonth = existingHasSchedule
-      ? existingEntry?.amountByMonth ?? {}
-      : (() => {
-          const knownMonths = new Set([
-            ...salaryCalendarMonths.map((monthItem) => monthItem.monthValue),
-            ...Object.keys(existingEntry?.amountByMonth ?? {}),
-            ...schedule.map((item) => item.monthValue),
-          ]);
-          const nextAmountByMonth = Object.fromEntries(
-            [...knownMonths].map((monthValue) => [monthValue, 0]),
-          ) as Record<string, number>;
+    const manualMonths = new Set(existingEntry?.manualAmountMonths ?? []);
+    const knownMonths = new Set([
+      ...salaryCalendarMonths.map((monthItem) => monthItem.monthValue),
+      ...Object.keys(existingEntry?.amountByMonth ?? {}),
+      ...schedule.map((item) => item.monthValue),
+    ]);
+    const amountByMonth = Object.fromEntries(
+      [...knownMonths].map((monthValue) => [monthValue, 0]),
+    ) as Record<string, number>;
 
-          schedule.forEach((item) => {
-            nextAmountByMonth[item.monthValue] = item.amount;
-          });
-
-          return nextAmountByMonth;
-        })();
+    schedule.forEach((item) => {
+      amountByMonth[item.monthValue] = item.amount;
+    });
+    manualMonths.forEach((monthValue) => {
+      if (Object.prototype.hasOwnProperty.call(existingEntry?.amountByMonth ?? {}, monthValue)) {
+        amountByMonth[monthValue] = existingEntry?.amountByMonth[monthValue] ?? 0;
+      }
+    });
 
     const paymentDetails = getPlannedPaymentDetails(
       debt.plannedPaymentMethod,
@@ -3951,7 +3959,7 @@ export function FinanceApp() {
       linkedInvestmentId: undefined,
       syncCardLimit: false,
       manualAmountMonths: existingEntry?.manualAmountMonths ?? [],
-      notes: debt.description ?? existingEntry?.notes,
+      notes: existingEntry?.notes ?? debt.description,
     };
   }, [cards, categories, defaultBillCategoryId, salaryCalendarMonths, selectedMonth, settings.defaultAccountId]);
 
@@ -5049,11 +5057,28 @@ export function FinanceApp() {
       return initialDraftDebt;
     }
 
+    const linkedEntry = getLinkedDebtEntry(debt.id);
+    const scheduledRemainingInstallments = linkedEntry
+      ? Object.entries(linkedEntry.amountByMonth).filter(
+          ([monthValue, amount]) =>
+            monthValue >= selectedMonth &&
+            amount > 0 &&
+            !linkedEntry.completedMonths.includes(monthValue),
+        ).length
+      : 0;
+    const remainingInstallments = Math.max(
+      1,
+      scheduledRemainingInstallments ||
+        (debt.totalInstallments || 0) - (debt.paidInstallments || 0) ||
+        1,
+    );
+
     return {
       name: debt.name,
       description: debt.description ?? "",
       totalAmount: String(debt.totalAmount),
       paidAmount: String(debt.paidAmount),
+      installments: String(remainingInstallments),
       installmentAmount: String(debt.installmentAmount),
       nextDueDate: debt.nextDueDate,
       priority: debt.priority,
@@ -5071,7 +5096,12 @@ export function FinanceApp() {
     const linkedEntry = getLinkedDebtEntry(debt.id);
     const unpaidMonths = linkedEntry
       ? Object.entries(linkedEntry.amountByMonth)
-          .filter(([monthValue, amount]) => amount > 0 && !linkedEntry.completedMonths.includes(monthValue))
+          .filter(
+            ([monthValue, amount]) =>
+              monthValue >= selectedMonth &&
+              amount > 0 &&
+              !linkedEntry.completedMonths.includes(monthValue),
+          )
           .sort(([left], [right]) => left.localeCompare(right))
       : [];
 
@@ -5086,14 +5116,17 @@ export function FinanceApp() {
       };
     }
 
+    const safeMonths = Math.max(
+      1,
+      (debt.totalInstallments || 0) - (debt.paidInstallments || 0) || 1,
+    );
     const configuredCap =
-      settings.monthlyDebtPaymentCap > 0
-        ? settings.monthlyDebtPaymentCap
-        : debt.installmentAmount > 0
-          ? debt.installmentAmount
-          : Number((Math.max(0, debt.remainingAmount) / 2).toFixed(2));
+      debt.installmentAmount > 0
+        ? debt.installmentAmount
+        : settings.monthlyDebtPaymentCap > 0
+          ? settings.monthlyDebtPaymentCap
+          : Number((Math.max(0, debt.remainingAmount) / safeMonths).toFixed(2));
     const safeAmount = Number(Math.max(0.01, configuredCap).toFixed(2));
-    const safeMonths = Math.max(1, Math.ceil(Math.max(0, debt.remainingAmount) / safeAmount));
 
     return {
       debtId: debt.id,
@@ -5635,6 +5668,17 @@ export function FinanceApp() {
     if (row.linkedDebtId) {
       const debt = debts.find((item) => item.id === row.linkedDebtId);
       if (debt) {
+        const remainingInstallments = Math.max(
+          1,
+          Object.entries(row.amountByMonth).filter(
+            ([entryMonthValue, entryAmount]) =>
+              entryMonthValue >= selectedMonth &&
+              entryAmount > 0 &&
+              !row.completedMonths.includes(entryMonthValue),
+          ).length ||
+            (debt.totalInstallments || 0) - (debt.paidInstallments || 0) ||
+            1,
+        );
         setEditingCommitmentTarget({ sourceType: "debt", sourceId: debt.id, monthValue });
         setDraftCommitment({
           ...baseDraft,
@@ -5644,7 +5688,7 @@ export function FinanceApp() {
           categoryId: row.categoryId,
           totalAmount: String(debt.totalAmount),
           installmentAmount: String(debt.installmentAmount),
-          installments: String(debt.totalInstallments),
+          installments: String(remainingInstallments),
           startDate: debt.nextDueDate,
           paymentMethod: debt.plannedPaymentMethod ?? "pix",
           cardId: debt.plannedCardId ?? settings.defaultCardId,
@@ -5927,16 +5971,31 @@ export function FinanceApp() {
   function persistDebtDraft(targetDebtId: string | null = editingDebtId) {
     const totalAmount = Number(draftDebt.totalAmount.replace(",", ".")) || 0;
     const paidAmount = Number(draftDebt.paidAmount.replace(",", ".")) || 0;
-    const installmentAmount = Number(draftDebt.installmentAmount.replace(",", ".")) || 0;
+    const rawInstallmentAmount = Number(draftDebt.installmentAmount.replace(",", ".")) || 0;
+    const remainingInstallments = Math.max(1, Number(draftDebt.installments.replace(",", ".")) || 1);
 
     if (!draftDebt.name.trim() || !totalAmount) {
       return false;
     }
 
+    const existingDebt = debts.find((debt) => debt.id === targetDebtId);
     const safePaid = Math.max(0, Math.min(totalAmount, paidAmount));
     const remainingAmount = Math.max(0, totalAmount - safePaid);
-    const totalInstallments = installmentAmount > 0 ? Math.max(1, Math.ceil(totalAmount / installmentAmount)) : 1;
-    const paidInstallments = installmentAmount > 0 ? Math.min(totalInstallments, Math.floor(safePaid / installmentAmount)) : 0;
+    const installmentAmount = Number(
+      Math.max(0.01, rawInstallmentAmount || remainingAmount / remainingInstallments || totalAmount).toFixed(2),
+    );
+    const fallbackPaidInstallments = Math.max(
+      0,
+      Math.floor(safePaid / Math.max(installmentAmount, 1)),
+    );
+    const paidInstallments = Math.max(
+      0,
+      Math.min(
+        existingDebt?.paidInstallments ?? fallbackPaidInstallments,
+        existingDebt?.totalInstallments ?? fallbackPaidInstallments,
+      ),
+    );
+    const totalInstallments = paidInstallments + remainingInstallments;
 
     const nextDebt: Debt = {
       id: targetDebtId ?? `debt-${crypto.randomUUID()}`,
@@ -5947,7 +6006,7 @@ export function FinanceApp() {
       remainingAmount,
       totalInstallments,
       paidInstallments,
-      installmentAmount: installmentAmount || remainingAmount || totalAmount,
+      installmentAmount,
       nextDueDate: draftDebt.nextDueDate,
       priority: draftDebt.priority,
       status: draftDebt.status,
@@ -6182,9 +6241,12 @@ export function FinanceApp() {
     }
 
     if (target.sourceType === "debt") {
-      const safePaid = Math.max(0, Math.min(totalAmount, debts.find((debt) => debt.id === target.sourceId)?.paidAmount ?? 0));
+      const existingDebt = debts.find((debt) => debt.id === target.sourceId);
+      const existingDebtEntry = getLinkedDebtEntry(target.sourceId);
+      const safePaid = Math.max(0, Math.min(totalAmount, existingDebt?.paidAmount ?? 0));
+      const paidInstallments = Math.max(0, existingDebt?.paidInstallments ?? 0);
       const nextDebt: Debt = {
-        ...(debts.find((debt) => debt.id === target.sourceId) ?? {
+        ...(existingDebt ?? {
           id: target.sourceId,
           paidAmount: 0,
           paidInstallments: 0,
@@ -6196,19 +6258,45 @@ export function FinanceApp() {
         totalAmount,
         paidAmount: safePaid,
         remainingAmount: Math.max(0, totalAmount - safePaid),
-        totalInstallments: rawInstallments,
-        paidInstallments: Math.min(rawInstallments, Math.floor(safePaid / Math.max(installmentAmount, 1))),
+        totalInstallments: paidInstallments + rawInstallments,
+        paidInstallments,
         installmentAmount,
         nextDueDate: draftCommitment.startDate,
         plannedPaymentMethod: draftCommitment.paymentMethod,
         plannedCardId: draftCommitment.paymentMethod === "card" ? draftCommitment.cardId : undefined,
       };
-      const linkedEntry = buildFixedEntryFromDebt(nextDebt);
+      const linkedEntry = buildFixedEntryFromDebt(nextDebt, existingDebtEntry);
+      const activeManualMonths =
+        hasMonthlyAmounts && linkedEntry
+          ? salaryCalendarMonths
+              .map((monthItem) => monthItem.monthValue)
+              .filter(
+                (activeMonth) =>
+                  (existingDebtEntry?.manualAmountMonths ?? []).includes(activeMonth) ||
+                  (monthlyAmounts[activeMonth] ?? 0) !== (linkedEntry.amountByMonth[activeMonth] ?? 0),
+              )
+          : [];
+      const nextLinkedEntry = linkedEntry
+        ? {
+            ...linkedEntry,
+            categoryId: category.id,
+            categoryName: category.name,
+            amountByMonth: hasMonthlyAmounts
+              ? {
+                  ...linkedEntry.amountByMonth,
+                  ...monthlyAmounts,
+                }
+              : linkedEntry.amountByMonth,
+            manualAmountMonths: hasMonthlyAmounts
+              ? [...new Set([...(linkedEntry.manualAmountMonths ?? []), ...activeManualMonths])]
+              : linkedEntry.manualAmountMonths,
+          }
+        : null;
 
       setDebts((current) => current.map((debt) => (debt.id === target.sourceId ? nextDebt : debt)));
-      if (linkedEntry) {
+      if (nextLinkedEntry) {
         setFixedEntries((current) =>
-          current.map((entry) => (entry.linkedDebtId === target.sourceId ? { ...linkedEntry, id: entry.id } : entry)),
+          current.map((entry) => (entry.linkedDebtId === target.sourceId ? { ...nextLinkedEntry, id: entry.id } : entry)),
         );
       }
       closeCommitmentModal();
@@ -6231,6 +6319,32 @@ export function FinanceApp() {
             ]),
           ) as Record<string, number>;
       const nextEntry = fixedEntries.find((entry) => entry.id === target.sourceId);
+      const fixedManualAmountMonths =
+        nextEntry?.syncCardLimit && nextEntry.cardId
+          ? (() => {
+              const linkedCard = cards.find((card) => card.id === nextEntry.cardId);
+              if (!linkedCard) {
+                return nextEntry.manualAmountMonths ?? [];
+              }
+
+              return salaryCalendarMonths
+                .map((monthItem) => monthItem.monthValue)
+                .filter((activeMonth) => amountByMonth[activeMonth] !== linkedCard.creditLimit);
+            })()
+          : nextEntry?.linkedInvestmentId
+            ? (() => {
+                const linkedInvestment = investments.find(
+                  (investment) => investment.id === nextEntry.linkedInvestmentId,
+                );
+                if (!linkedInvestment) {
+                  return nextEntry.manualAmountMonths ?? [];
+                }
+
+                return salaryCalendarMonths
+                  .map((monthItem) => monthItem.monthValue)
+                  .filter((activeMonth) => amountByMonth[activeMonth] !== linkedInvestment.monthlyTarget);
+              })()
+            : nextEntry?.manualAmountMonths ?? [];
 
       setFixedEntries((current) =>
         current.map((entry) =>
@@ -6243,9 +6357,13 @@ export function FinanceApp() {
                 categoryId: category.id,
                 categoryName: category.name,
                 amountByMonth,
+                completedMonths: entry.completedMonths.filter(
+                  (completedMonth) => (amountByMonth[completedMonth] ?? 0) > 0,
+                ),
                 paymentMethod: paymentDetails.transactionMethod,
                 cardId: paymentDetails.cardId,
                 cardMode: paymentDetails.cardMode,
+                manualAmountMonths: fixedManualAmountMonths,
                 notes: draftCommitment.notes.trim() || undefined,
               }
             : entry,
@@ -6268,6 +6386,19 @@ export function FinanceApp() {
                   notes: draftCommitment.notes.trim() || undefined,
                 }
               : bill,
+          ),
+        );
+      }
+
+      if (nextEntry?.linkedInvestmentId) {
+        setInvestments((current) =>
+          current.map((investment) =>
+            investment.id === nextEntry.linkedInvestmentId
+              ? {
+                  ...investment,
+                  plannedAmountByMonth: amountByMonth,
+                }
+              : investment,
           ),
         );
       }
@@ -6918,10 +7049,14 @@ export function FinanceApp() {
       0.01,
       Number(draftDebtPlan.installmentAmount.replace(",", ".")) || debt.installmentAmount || 0.01,
     );
-    const debtCategory =
+    const fallbackDebtCategory =
       categories.find((item) => item.id === defaultBillCategoryId) ??
       categories.find((item) => item.type === "expense") ??
       categories[0];
+    const linkedEntry = getLinkedDebtEntry(debt.id);
+    const debtCategory =
+      categories.find((item) => item.id === linkedEntry?.categoryId) ??
+      fallbackDebtCategory;
     if (!debtCategory) {
       return;
     }
@@ -6932,8 +7067,7 @@ export function FinanceApp() {
       "credit",
       cards,
     );
-    const linkedEntry = getLinkedDebtEntry(debt.id);
-    const scheduleStartMonth = debt.nextDueDate.slice(0, 7) || selectedMonth;
+    const scheduleStartMonth = selectedMonth || debt.nextDueDate.slice(0, 7);
     const { schedule } = buildDebtPlanSchedule(
       scheduleStartMonth,
       remainingAmount,
@@ -6973,8 +7107,8 @@ export function FinanceApp() {
       linkedDebtId: debt.id,
       linkedInvestmentId: undefined,
       syncCardLimit: false,
-      manualAmountMonths: linkedEntry?.manualAmountMonths ?? [],
-      notes: debt.description ?? linkedEntry?.notes,
+      manualAmountMonths: [],
+      notes: linkedEntry?.notes ?? debt.description,
     };
 
     setFixedEntries((current) => {
@@ -6997,6 +7131,7 @@ export function FinanceApp() {
           ? {
               ...item,
               installmentAmount,
+              totalInstallments: (item.paidInstallments || 0) + monthCount,
               nextDueDate,
             }
           : item,
@@ -8008,6 +8143,14 @@ export function FinanceApp() {
                   investments.find((investment) => investment.id === existingEntry.linkedInvestmentId)
                     ?.monthlyTarget,
               )
+          : existingEntry?.linkedDebtId
+            ? salaryCalendarMonths
+                .map((monthItem) => monthItem.monthValue)
+                .filter(
+                  (monthValue) =>
+                    (existingEntry.manualAmountMonths ?? []).includes(monthValue) ||
+                    normalizedAmountByMonth[monthValue] !== (existingEntry.amountByMonth[monthValue] ?? 0),
+                )
           : [];
 
     const nextEntry: FixedFlowEntry = {
@@ -8251,56 +8394,10 @@ export function FinanceApp() {
     monthValue: string,
     nextAmount: number,
   ) {
-    const orderedMonths = salaryCalendarMonths.map((monthItem) => monthItem.monthValue);
-    const currentIndex = orderedMonths.indexOf(monthValue);
-
-    if (currentIndex < 0) {
-      return {
-        ...entry.amountByMonth,
-        [monthValue]: Number(nextAmount.toFixed(2)),
-      };
-    }
-
-    const affectedMonths = orderedMonths
-      .slice(currentIndex)
-      .filter((value) => (entry.amountByMonth[value] ?? 0) > 0 || value === monthValue);
-    const outstanding = affectedMonths.reduce(
-      (sum, value) => sum + (entry.amountByMonth[value] ?? 0),
-      0,
-    );
-    const appliedAmount = Number(Math.max(0, Math.min(nextAmount, outstanding)).toFixed(2));
-    const baseInstallment =
-      (entry.amountByMonth[monthValue] ?? 0) ||
-      affectedMonths
-        .map((value) => entry.amountByMonth[value] ?? 0)
-        .find((value) => value > 0) ||
-      appliedAmount;
-    const nextAmounts = { ...entry.amountByMonth };
-
-    affectedMonths.forEach((value) => {
-      nextAmounts[value] = 0;
-    });
-    nextAmounts[monthValue] = appliedAmount;
-
-    let remaining = Number((outstanding - appliedAmount).toFixed(2));
-    const futureMonths = affectedMonths.filter((value) => value !== monthValue);
-
-    futureMonths.forEach((value, index) => {
-      if (remaining <= 0) {
-        nextAmounts[value] = 0;
-        return;
-      }
-
-      const allocation =
-        index === futureMonths.length - 1
-          ? remaining
-          : Math.min(baseInstallment, remaining);
-
-      nextAmounts[value] = Number(allocation.toFixed(2));
-      remaining = Number((remaining - allocation).toFixed(2));
-    });
-
-    return nextAmounts;
+    return {
+      ...entry.amountByMonth,
+      [monthValue]: Number(Math.max(0, nextAmount).toFixed(2)),
+    };
   }
 
   function handleFixedEntryAmountChange(entryId: string, monthValue: string, rawValue: string) {
@@ -8363,6 +8460,13 @@ export function FinanceApp() {
 
                 return [...nextManualMonths];
               })()
+            : entry.linkedDebtId
+              ? (() => {
+                  const nextManualMonths = new Set(entry.manualAmountMonths ?? []);
+                  nextManualMonths.add(monthValue);
+
+                  return [...nextManualMonths];
+                })()
             : entry.manualAmountMonths,
       completedMonths:
         nextAmount <= 0
@@ -8700,6 +8804,14 @@ export function FinanceApp() {
 
                 return [...nextManualMonths];
               })()
+            : entry.linkedDebtId
+              ? (() => {
+                  const nextManualMonths = new Set(entry.manualAmountMonths ?? []);
+                  nextManualMonths.add(sourceMonthValue);
+                  nextManualMonths.add(targetMonthValue);
+
+                  return [...nextManualMonths];
+                })()
           : entry.manualAmountMonths,
       completedMonths: [...new Set(nextCompletedMonths)],
     };
@@ -12633,6 +12745,7 @@ export function FinanceApp() {
     const isInstallment = draftCommitment.schedule === "installments";
     const usesCard = draftCommitment.paymentMethod === "card";
     const isSavingGoal = draftCommitment.schedule === "saving_goal";
+    const isEditingDebtCommitment = editingCommitmentTarget?.sourceType === "debt";
     const installments = Math.max(1, Number(draftCommitment.installments.replace(",", ".")) || 1);
     const totalAmount = Number(draftCommitment.totalAmount.replace(",", ".")) || 0;
     const suggestedInstallment = installments > 0 ? Number((totalAmount / installments).toFixed(2)) : totalAmount;
@@ -12829,7 +12942,7 @@ export function FinanceApp() {
 
               {isInstallment ? (
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <FormField label="Quantidade de parcelas">
+                  <FormField label={isEditingDebtCommitment ? "Parcelas restantes" : "Quantidade de parcelas"}>
                     <input
                       value={draftCommitment.installments}
                       onChange={(event) => setDraftCommitment((current) => ({ ...current, installments: event.target.value }))}
@@ -13842,7 +13955,7 @@ export function FinanceApp() {
                     className="field"
                   />
                 </FormField>
-                <div className="grid gap-3 sm:grid-cols-3">
+                <div className="grid gap-3 sm:grid-cols-4">
                   <FormField label="Ja pago">
                     <input
                       value={draftDebt.paidAmount}
@@ -13853,7 +13966,17 @@ export function FinanceApp() {
                       className="field"
                     />
                   </FormField>
-                  <FormField label="Abatimento sugerido">
+                  <FormField label="Parcelas restantes">
+                    <input
+                      value={draftDebt.installments}
+                      onChange={(event) =>
+                        setDraftDebt((current) => ({ ...current, installments: event.target.value }))
+                      }
+                      inputMode="numeric"
+                      className="field"
+                    />
+                  </FormField>
+                  <FormField label="Valor da parcela">
                     <input
                       value={draftDebt.installmentAmount}
                       onChange={(event) =>
@@ -13963,11 +14086,14 @@ export function FinanceApp() {
             <FormField label="Descricao">
               <input value={draftDebt.description} onChange={(event) => setDraftDebt((current) => ({ ...current, description: event.target.value }))} className="field" />
             </FormField>
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-4">
               <FormField label="Ja pago">
                 <input value={draftDebt.paidAmount} onChange={(event) => setDraftDebt((current) => ({ ...current, paidAmount: event.target.value }))} inputMode="decimal" className="field" />
               </FormField>
-              <FormField label="Abatimento sugerido">
+              <FormField label="Parcelas restantes">
+                <input value={draftDebt.installments} onChange={(event) => setDraftDebt((current) => ({ ...current, installments: event.target.value }))} inputMode="numeric" className="field" />
+              </FormField>
+              <FormField label="Valor da parcela">
                 <input value={draftDebt.installmentAmount} onChange={(event) => setDraftDebt((current) => ({ ...current, installmentAmount: event.target.value }))} inputMode="decimal" className="field" />
               </FormField>
               <FormField label="Proximo vencimento">
@@ -14103,7 +14229,7 @@ export function FinanceApp() {
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2">
-                <FormField label="Quantidade de meses">
+                <FormField label="Parcelas restantes">
                   <input
                     value={draftDebtPlan.monthCount}
                     onChange={(event) =>
@@ -16082,7 +16208,7 @@ export function FinanceApp() {
                   </div>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <InfoBlock label="Total" value={formatCurrency(debt.totalAmount)} />
-                    <InfoBlock label="Abatimento sugerido" value={formatCurrency(debt.installmentAmount)} />
+                    <InfoBlock label="Valor da parcela" value={formatCurrency(debt.installmentAmount)} />
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
                     <button
