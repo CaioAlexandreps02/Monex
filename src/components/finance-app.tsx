@@ -5987,10 +5987,17 @@ export function FinanceApp() {
 
     const existingDebt = debts.find((debt) => debt.id === targetDebtId);
     const safePaid = Math.max(0, Math.min(totalAmount, paidAmount));
-    const remainingAmount = Math.max(0, totalAmount - safePaid);
+    const baseRemainingAmount = Math.max(0, totalAmount - safePaid);
     const installmentAmount = Number(
-      Math.max(0.01, rawInstallmentAmount || remainingAmount / remainingInstallments || totalAmount).toFixed(2),
+      Math.max(0.01, rawInstallmentAmount || baseRemainingAmount / remainingInstallments || totalAmount).toFixed(2),
     );
+    const remainingAmount = Number(
+      Math.max(
+        0,
+        rawInstallmentAmount > 0 ? installmentAmount * remainingInstallments : baseRemainingAmount,
+      ).toFixed(2),
+    );
+    const normalizedTotalAmount = Number(Math.max(totalAmount, safePaid + remainingAmount).toFixed(2));
     const fallbackPaidInstallments = Math.max(
       0,
       Math.floor(safePaid / Math.max(installmentAmount, 1)),
@@ -6008,7 +6015,7 @@ export function FinanceApp() {
       id: targetDebtId ?? `debt-${crypto.randomUUID()}`,
       name: draftDebt.name.trim(),
       description: draftDebt.description.trim() || undefined,
-      totalAmount,
+      totalAmount: normalizedTotalAmount,
       paidAmount: safePaid,
       remainingAmount,
       totalInstallments,
@@ -6252,6 +6259,22 @@ export function FinanceApp() {
       const existingDebtEntry = getLinkedDebtEntry(target.sourceId);
       const safePaid = Math.max(0, Math.min(totalAmount, existingDebt?.paidAmount ?? 0));
       const paidInstallments = Math.max(0, existingDebt?.paidInstallments ?? 0);
+      const hasManualMonthlyAmounts =
+        hasMonthlyAmounts &&
+        Boolean(existingDebtEntry) &&
+        salaryCalendarMonths.some((monthItem) => {
+          const monthValueKey = monthItem.monthValue;
+          return (monthlyAmounts[monthValueKey] ?? 0) !== (existingDebtEntry?.amountByMonth[monthValueKey] ?? 0);
+        });
+      const plannedRemainingAmount = Number(
+        Math.max(
+          0,
+          hasManualMonthlyAmounts
+            ? monthlyTotal
+            : installmentAmount * rawInstallments,
+        ).toFixed(2),
+      );
+      const nextDebtTotalAmount = Number(Math.max(totalAmount, safePaid + plannedRemainingAmount).toFixed(2));
       const nextDebt: Debt = {
         ...(existingDebt ?? {
           id: target.sourceId,
@@ -6262,9 +6285,9 @@ export function FinanceApp() {
         } as Debt),
         name: title,
         description: draftCommitment.notes.trim() || undefined,
-        totalAmount,
+        totalAmount: nextDebtTotalAmount,
         paidAmount: safePaid,
-        remainingAmount: Math.max(0, totalAmount - safePaid),
+        remainingAmount: plannedRemainingAmount,
         totalInstallments: paidInstallments + rawInstallments,
         paidInstallments,
         installmentAmount,
@@ -6274,7 +6297,7 @@ export function FinanceApp() {
       };
       const linkedEntry = buildFixedEntryFromDebt(nextDebt, existingDebtEntry);
       const activeManualMonths =
-        hasMonthlyAmounts && linkedEntry
+        hasManualMonthlyAmounts && linkedEntry
           ? salaryCalendarMonths
               .map((monthItem) => monthItem.monthValue)
               .filter(
@@ -6288,13 +6311,13 @@ export function FinanceApp() {
             ...linkedEntry,
             categoryId: category.id,
             categoryName: category.name,
-            amountByMonth: hasMonthlyAmounts
+            amountByMonth: hasManualMonthlyAmounts
               ? {
                   ...linkedEntry.amountByMonth,
                   ...monthlyAmounts,
                 }
               : linkedEntry.amountByMonth,
-            manualAmountMonths: hasMonthlyAmounts
+            manualAmountMonths: hasManualMonthlyAmounts
               ? [...new Set([...(linkedEntry.manualAmountMonths ?? []), ...activeManualMonths])]
               : linkedEntry.manualAmountMonths,
           }

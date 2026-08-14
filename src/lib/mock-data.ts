@@ -641,7 +641,9 @@ export const debts: Debt[] = [
   },
 ];
 
-export const plannedPurchases: PlannedPurchase[] = [
+export const plannedPurchases: PlannedPurchase[] = [];
+
+/*
   {
     id: "plan-1",
     name: "Freio moto",
@@ -715,6 +717,7 @@ export const plannedPurchases: PlannedPurchase[] = [
     plannedCardId: "card-nubank",
   },
 ];
+*/
 
 export const investments: Investment[] = [];
 
