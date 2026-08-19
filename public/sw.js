@@ -1,4 +1,4 @@
-const CACHE_NAME = "monex-shell-v1";
+const CACHE_NAME = "monex-shell-v2";
 const PRECACHE_URLS = [
   "/",
   "/manifest.json",

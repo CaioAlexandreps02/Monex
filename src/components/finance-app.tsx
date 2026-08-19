@@ -10575,20 +10575,20 @@ export function FinanceApp() {
                           <table className="w-full table-fixed border-separate border-spacing-0 text-[11px] lg:min-w-[1120px]">
                             <thead>
                               <tr className="text-left">
-                                <th className="snap-start w-[85vw] border-b border-r border-slate-300 bg-slate-200 px-3 py-3 text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:w-[38vw] lg:sticky lg:left-0 lg:z-30 lg:w-[180px]">
+                                <th className="snap-start w-[55vw] border-b border-r border-slate-300 bg-slate-200 px-3 py-3 text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:w-[38vw] lg:sticky lg:left-0 lg:z-30 lg:w-[180px]">
                                   Item
                                 </th>
                                 {salaryCalendarMonths.map((monthItem) => (
                                   <th
                                     key={monthItem.monthValue}
-                                    className={`snap-start z-20 w-[85vw] border-b border-r border-slate-300 bg-slate-200 px-1 py-3 text-center text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:w-[38vw] lg:w-[78px] ${
+                                    className={`snap-start z-20 w-[55vw] border-b border-r border-slate-300 bg-slate-200 px-1 py-3 text-center text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:w-[38vw] lg:w-[78px] ${
                                       monthItem.monthValue === selectedMonth ? "bg-blue-100 text-blue-900 ring-2 ring-inset ring-blue-600" : ""
                                     }`}
                                   >
                                     {monthItem.label}
                                   </th>
                                 ))}
-                                <th className="snap-start w-[85vw] border-b border-slate-300 bg-slate-200 px-3 py-3 text-right text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:w-[38vw] lg:w-[84px]">
+                                <th className="snap-start w-[55vw] border-b border-slate-300 bg-slate-200 px-3 py-3 text-right text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:w-[38vw] lg:w-[84px]">
                                   Total
                                 </th>
                               </tr>
@@ -10630,7 +10630,7 @@ export function FinanceApp() {
                                   {group.rows.map((row) => (
                                 <Fragment key={row.id}>
                                 <tr className="align-top">
-                                  <th className="snap-start w-[85vw] border-b border-r border-slate-200 bg-white p-1.5 text-left sm:w-[38vw] lg:sticky lg:left-0 lg:z-20 lg:w-[180px]">
+                                  <th className="snap-start w-[55vw] border-b border-r border-slate-200 bg-white p-1.5 text-left sm:w-[38vw] lg:sticky lg:left-0 lg:z-20 lg:w-[180px]">
                                     <div
                                       role="button"
                                       tabIndex={0}
@@ -10981,7 +10981,7 @@ export function FinanceApp() {
 
                                           return (
                                             <tr key={`${row.id}-${item.id}`} className="align-top">
-                                              <th className="w-[85vw] border-b border-r border-slate-200 bg-slate-50/80 px-2 py-2.5 text-left sm:w-[38vw] lg:sticky lg:left-0 lg:z-20 lg:w-[180px]">
+                                              <th className="w-[55vw] border-b border-r border-slate-200 bg-slate-50/80 px-2 py-2.5 text-left sm:w-[38vw] lg:sticky lg:left-0 lg:z-20 lg:w-[180px]">
                                                 <div className={`rounded-xl border px-2 py-2 shadow-sm transition ${
                                                   isItemSelected
                                                     ? "border-violet-200 bg-violet-50"
@@ -11122,7 +11122,7 @@ export function FinanceApp() {
                                 </Fragment>
                               ))}
                               <tr className="align-top">
-                                <th className="w-[85vw] border-r border-t border-slate-200 bg-slate-900 px-3 py-3 text-left text-[10px] uppercase tracking-[0.16em] text-white sm:w-[38vw] lg:sticky lg:left-0 lg:z-30 lg:w-[180px]">
+                                <th className="w-[55vw] border-r border-t border-slate-200 bg-slate-900 px-3 py-3 text-left text-[10px] uppercase tracking-[0.16em] text-white sm:w-[38vw] lg:sticky lg:left-0 lg:z-30 lg:w-[180px]">
                                   Soma
                                 </th>
                                 {salaryCalendarMonths.map((monthItem) => {
