@@ -10330,6 +10330,7 @@ export function FinanceApp() {
             <Panel
               title=""
               description=""
+              clipOverflow={false}
             >
               <div className="mb-4 rounded-[26px] border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-sky-50 px-4 py-4 lg:hidden">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-blue-600">
@@ -10491,7 +10492,7 @@ export function FinanceApp() {
                   return (
                     <div
                       key={section}
-                      className={`min-w-0 overflow-hidden rounded-2xl border px-3 py-3 transition duration-200 ${fixedSectionStyles[section]}`}
+                      className={`min-w-0 rounded-2xl border px-3 py-3 transition duration-200 ${fixedSectionStyles[section]}`}
                     >
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="space-y-2">

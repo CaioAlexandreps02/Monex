@@ -302,14 +302,20 @@ export function Panel({
   title,
   action,
   children,
+  clipOverflow = true,
 }: {
   title: string;
   description?: string;
   action?: React.ReactNode;
   children: React.ReactNode;
+  clipOverflow?: boolean;
 }) {
   return (
-    <section className="min-w-0 max-w-full overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)]">
+    <section
+      className={`min-w-0 max-w-full rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)] ${
+        clipOverflow ? "overflow-hidden" : ""
+      }`}
+    >
       {title || action ? (
         <div className="mb-4 flex items-start justify-between gap-4">
           {title ? (
