@@ -5,8 +5,6 @@ import { createPortal } from "react-dom";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 
-import { useIsMobile } from "@/hooks/use-is-mobile";
-
 import {
   accounts as seedAccounts,
   bankPresets as seedBankPresets,
@@ -110,8 +108,6 @@ import {
   Plus,
   ChevronDown,
   ChevronUp,
-  ChevronLeft,
-  ChevronRight,
   X,
   Trash2,
   AlertCircle,
@@ -1265,7 +1261,6 @@ export function FinanceApp() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const isMobile = useIsMobile();
   const activeView: ViewId =
     pathname === "/transacoes"
       ? "transactions"
@@ -10328,22 +10323,6 @@ export function FinanceApp() {
       };
     });
 
-    const visibleMonths = isMobile
-      ? salaryCalendarMonths.filter((monthItem) => monthItem.monthValue === selectedMonth)
-      : salaryCalendarMonths;
-    const visibleComparison = isMobile
-      ? fixedMonthlyComparison.filter((item) => item.monthValue === selectedMonth)
-      : fixedMonthlyComparison;
-    const currentMonthIndex = salaryCalendarMonths.findIndex((item) => item.monthValue === selectedMonth);
-    const canStepPrevMonth = currentMonthIndex > 0;
-    const canStepNextMonth = currentMonthIndex >= 0 && currentMonthIndex < salaryCalendarMonths.length - 1;
-    const stepGridMonth = (direction: -1 | 1) => {
-      const target = salaryCalendarMonths[currentMonthIndex + direction];
-      if (target) {
-        handleMonthChange(target.monthValue);
-      }
-    };
-
     return (
       <div className="space-y-4">
         {workspaceMode === "fixed" ? (
@@ -10411,34 +10390,8 @@ export function FinanceApp() {
                 </div>
               </div>
 
-              {isMobile ? (
-                <div className="mt-4 flex items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2.5">
-                  <button
-                    type="button"
-                    onClick={() => stepGridMonth(-1)}
-                    disabled={!canStepPrevMonth}
-                    className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition disabled:cursor-not-allowed disabled:opacity-40"
-                    aria-label="Mes anterior"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </button>
-                  <p className="text-sm font-semibold text-slate-900">
-                    {formatMonthLabel(monthValueToDate(selectedMonth))}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => stepGridMonth(1)}
-                    disabled={!canStepNextMonth}
-                    className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition disabled:cursor-not-allowed disabled:opacity-40"
-                    aria-label="Proximo mes"
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </button>
-                </div>
-              ) : null}
-
               <div className="mt-4 max-w-full overflow-x-auto pb-2">
-                <div className={`w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 ${isMobile ? "" : "min-w-[820px]"}`}>
+                <div className="w-full min-w-[820px] rounded-2xl border border-slate-200 bg-white px-3 py-3">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-2">
                     <p className="text-sm font-semibold text-slate-950">Comparativo mensal</p>
                     <p className="max-w-full text-xs font-medium text-slate-500">
@@ -10451,7 +10404,7 @@ export function FinanceApp() {
                         <th className="min-w-[96px] rounded-l-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500">
                           Linha
                         </th>
-                        {visibleComparison.map((monthItem) => (
+                        {fixedMonthlyComparison.map((monthItem) => (
                           <th
                             key={monthItem.monthValue}
                             className={`min-w-[72px] border border-slate-200 px-2 py-2 text-center text-[10px] uppercase tracking-[0.14em] ${
@@ -10468,7 +10421,7 @@ export function FinanceApp() {
                         <th className="rounded-l-xl border border-slate-200 bg-emerald-50 px-3 py-2.5 text-left text-[10px] uppercase tracking-[0.14em] text-emerald-700">
                           Entradas
                         </th>
-                        {visibleComparison.map((monthItem) => (
+                        {fixedMonthlyComparison.map((monthItem) => (
                           <td
                             key={`income-${monthItem.monthValue}`}
                             className={`border border-slate-200 px-2 py-2.5 text-center font-semibold text-emerald-700 ${
@@ -10483,7 +10436,7 @@ export function FinanceApp() {
                         <th className="rounded-l-xl border border-slate-200 bg-rose-50 px-3 py-2.5 text-left text-[10px] uppercase tracking-[0.14em] text-rose-700">
                           Saidas
                         </th>
-                        {visibleComparison.map((monthItem) => (
+                        {fixedMonthlyComparison.map((monthItem) => (
                           <td
                             key={`expenses-${monthItem.monthValue}`}
                             className={`border border-slate-200 px-2 py-2.5 text-center font-semibold text-rose-600 ${
@@ -10498,7 +10451,7 @@ export function FinanceApp() {
                         <th className="rounded-l-xl border border-slate-200 bg-blue-50 px-3 py-2.5 text-left text-[10px] uppercase tracking-[0.14em] text-blue-700">
                           Saldo
                         </th>
-                        {visibleComparison.map((monthItem) => (
+                        {fixedMonthlyComparison.map((monthItem) => (
                           <td
                             key={`balance-${monthItem.monthValue}`}
                             className={`border border-slate-200 px-2 py-2.5 text-center font-semibold ${
@@ -10618,24 +10571,24 @@ export function FinanceApp() {
                       </div>
 
                       {!isCollapsed ? (
-                        <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200 bg-white pb-2 shadow-sm">
-                          <table className={`w-full table-fixed border-separate border-spacing-0 text-[11px] ${isMobile ? "" : "min-w-[1120px]"}`}>
+                        <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200 bg-white pb-2 shadow-sm snap-x snap-proximity lg:snap-none">
+                          <table className="w-full table-fixed border-separate border-spacing-0 text-[11px] lg:min-w-[1120px]">
                             <thead>
                               <tr className="text-left">
-                                <th className={`sticky left-0 z-30 border-b border-r border-slate-300 bg-slate-200 px-3 py-3 text-[10px] uppercase tracking-[0.14em] text-slate-700 ${isMobile ? "w-[128px]" : "w-[180px]"}`}>
+                                <th className="snap-start w-[85vw] border-b border-r border-slate-300 bg-slate-200 px-3 py-3 text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:w-[38vw] lg:sticky lg:left-0 lg:z-30 lg:w-[180px]">
                                   Item
                                 </th>
-                                {visibleMonths.map((monthItem) => (
+                                {salaryCalendarMonths.map((monthItem) => (
                                   <th
                                     key={monthItem.monthValue}
-                                    className={`z-20 border-b border-r border-slate-300 bg-slate-200 px-1 py-3 text-center text-[10px] uppercase tracking-[0.14em] text-slate-700 ${isMobile ? "w-[92px]" : "w-[78px]"} ${
+                                    className={`snap-start z-20 w-[85vw] border-b border-r border-slate-300 bg-slate-200 px-1 py-3 text-center text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:w-[38vw] lg:w-[78px] ${
                                       monthItem.monthValue === selectedMonth ? "bg-blue-100 text-blue-900 ring-2 ring-inset ring-blue-600" : ""
                                     }`}
                                   >
                                     {monthItem.label}
                                   </th>
                                 ))}
-                                <th className={`border-b border-slate-300 bg-slate-200 px-3 py-3 text-right text-[10px] uppercase tracking-[0.14em] text-slate-700 ${isMobile ? "w-[68px]" : "w-[84px]"}`}>
+                                <th className="snap-start w-[85vw] border-b border-slate-300 bg-slate-200 px-3 py-3 text-right text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:w-[38vw] lg:w-[84px]">
                                   Total
                                 </th>
                               </tr>
@@ -10677,7 +10630,7 @@ export function FinanceApp() {
                                   {group.rows.map((row) => (
                                 <Fragment key={row.id}>
                                 <tr className="align-top">
-                                  <th className="sticky left-0 z-20 w-[180px] border-b border-r border-slate-200 bg-white p-1.5 text-left">
+                                  <th className="snap-start w-[85vw] border-b border-r border-slate-200 bg-white p-1.5 text-left sm:w-[38vw] lg:sticky lg:left-0 lg:z-20 lg:w-[180px]">
                                     <div
                                       role="button"
                                       tabIndex={0}
@@ -10749,7 +10702,7 @@ export function FinanceApp() {
                                       </span>
                                     </div>
                                   </th>
-                                  {visibleMonths.map((monthItem) => {
+                                  {salaryCalendarMonths.map((monthItem) => {
                                     const amount = row.amountByMonth[monthItem.monthValue] ?? 0;
                                     const isCompleted = row.completedMonths.includes(monthItem.monthValue);
                                     const isPurchaseRow = row.sourceType === "planned_purchase";
@@ -11028,7 +10981,7 @@ export function FinanceApp() {
 
                                           return (
                                             <tr key={`${row.id}-${item.id}`} className="align-top">
-                                              <th className="sticky left-0 z-20 w-[180px] border-b border-r border-slate-200 bg-slate-50/80 px-2 py-2.5 text-left">
+                                              <th className="w-[85vw] border-b border-r border-slate-200 bg-slate-50/80 px-2 py-2.5 text-left sm:w-[38vw] lg:sticky lg:left-0 lg:z-20 lg:w-[180px]">
                                                 <div className={`rounded-xl border px-2 py-2 shadow-sm transition ${
                                                   isItemSelected
                                                     ? "border-violet-200 bg-violet-50"
@@ -11097,7 +11050,7 @@ export function FinanceApp() {
                                                   </div>
                                                 </div>
                                               </th>
-                                          {visibleMonths.map((monthItem) => {
+                                          {salaryCalendarMonths.map((monthItem) => {
                                             const itemAmount = rowAmountsByMonth[monthItem.monthValue] ?? 0;
                                             return (
                                               <td
@@ -11169,10 +11122,10 @@ export function FinanceApp() {
                                 </Fragment>
                               ))}
                               <tr className="align-top">
-                                <th className={`sticky left-0 z-30 border-r border-t border-slate-200 bg-slate-900 px-3 py-3 text-left text-[10px] uppercase tracking-[0.16em] text-white ${isMobile ? "w-[128px]" : "w-[180px]"}`}>
+                                <th className="w-[85vw] border-r border-t border-slate-200 bg-slate-900 px-3 py-3 text-left text-[10px] uppercase tracking-[0.16em] text-white sm:w-[38vw] lg:sticky lg:left-0 lg:z-30 lg:w-[180px]">
                                   Soma
                                 </th>
-                                {visibleMonths.map((monthItem) => {
+                                {salaryCalendarMonths.map((monthItem) => {
                                   const amount = rows.reduce((sum, row) => sum + (row.amountByMonth[monthItem.monthValue] ?? 0), 0);
                                   return (
                                     <td
