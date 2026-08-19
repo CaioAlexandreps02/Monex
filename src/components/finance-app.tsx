@@ -10575,20 +10575,20 @@ export function FinanceApp() {
                           <table className="w-full table-fixed border-separate border-spacing-0 text-[11px] lg:min-w-[1120px]">
                             <thead>
                               <tr className="text-left">
-                                <th className="snap-start w-[45vw] border-b border-r border-slate-300 bg-slate-200 px-3 py-3 text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:w-[38vw] lg:sticky lg:left-0 lg:z-30 lg:w-[180px]">
+                                <th className="sticky top-0 z-30 snap-start w-[45vw] border-b border-r border-slate-300 bg-slate-200 px-3 py-3 text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:w-[38vw] lg:left-0 lg:w-[180px]">
                                   Item
                                 </th>
                                 {salaryCalendarMonths.map((monthItem) => (
                                   <th
                                     key={monthItem.monthValue}
-                                    className={`snap-start z-20 w-[45vw] border-b border-r border-slate-300 bg-slate-200 px-1 py-3 text-center text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:w-[38vw] lg:w-[78px] ${
+                                    className={`sticky top-0 z-20 snap-start w-[45vw] border-b border-r border-slate-300 bg-slate-200 px-1 py-3 text-center text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:w-[38vw] lg:w-[78px] ${
                                       monthItem.monthValue === selectedMonth ? "bg-blue-100 text-blue-900 ring-2 ring-inset ring-blue-600" : ""
                                     }`}
                                   >
                                     {monthItem.label}
                                   </th>
                                 ))}
-                                <th className="snap-start w-[45vw] border-b border-slate-300 bg-slate-200 px-3 py-3 text-right text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:w-[38vw] lg:w-[84px]">
+                                <th className="sticky top-0 z-20 snap-start w-[45vw] border-b border-slate-300 bg-slate-200 px-3 py-3 text-right text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:w-[38vw] lg:w-[84px]">
                                   Total
                                 </th>
                               </tr>
