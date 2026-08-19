@@ -10572,7 +10572,7 @@ export function FinanceApp() {
                       </div>
 
                       {!isCollapsed ? (
-                        <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200 bg-white pb-2 shadow-sm snap-x snap-proximity lg:snap-none">
+                        <div className="mt-4 max-h-[65vh] overflow-x-auto overflow-y-auto rounded-2xl border border-slate-200 bg-white pb-2 shadow-sm snap-x snap-proximity lg:snap-none">
                           <table className="w-full table-fixed border-separate border-spacing-0 text-[11px] lg:min-w-[1120px]">
                             <thead>
                               <tr className="text-left">
