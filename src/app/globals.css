@@ -102,3 +102,35 @@ body::-webkit-scrollbar-thumb {
 body::-webkit-scrollbar-track {
   background: transparent;
 }
+
+@media (max-width: 767px) {
+  button[class~="py-1"],
+  a[class~="py-1"],
+  button[class~="py-1.5"],
+  a[class~="py-1.5"],
+  button[class~="py-2"],
+  a[class~="py-2"],
+  button[class~="py-2.5"],
+  a[class~="py-2.5"],
+  button[class~="h-7"],
+  button[class~="h-8"],
+  button[class~="h-9"] {
+    position: relative;
+  }
+
+  button[class~="py-1"]::after,
+  a[class~="py-1"]::after,
+  button[class~="py-1.5"]::after,
+  a[class~="py-1.5"]::after,
+  button[class~="py-2"]::after,
+  a[class~="py-2"]::after,
+  button[class~="py-2.5"]::after,
+  a[class~="py-2.5"]::after,
+  button[class~="h-7"]::after,
+  button[class~="h-8"]::after,
+  button[class~="h-9"]::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+  }
+}

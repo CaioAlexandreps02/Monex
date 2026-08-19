@@ -274,28 +274,27 @@ export function MobileNavigation({
   onNavigate: (viewId: ViewId) => void;
 }) {
   return (
-    <div className="lg:hidden">
-      <div className="overflow-x-auto pb-1">
-        <div className="flex min-w-max gap-2">
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onNavigate(item.id)}
-              aria-pressed={activeView === item.id}
-              className={`flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition ${
-                activeView === item.id
-                  ? "bg-slate-900 text-white"
-                  : "bg-white text-slate-700 shadow-[0_12px_32px_rgba(15,23,42,0.08)]"
-              }`}
-            >
-              {item.icon && <item.icon className="h-4 w-4" />}
-              {item.shortLabel}
-            </button>
-          ))}
-        </div>
+    <nav
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur lg:hidden"
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+    >
+      <div className="flex">
+        {navItems.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => onNavigate(item.id)}
+            aria-pressed={activeView === item.id}
+            className={`flex flex-1 flex-col items-center gap-1 px-1 py-2.5 text-[11px] font-semibold transition ${
+              activeView === item.id ? "text-blue-600" : "text-slate-500"
+            }`}
+          >
+            {item.icon && <item.icon className="h-5 w-5" />}
+            <span className="truncate">{item.shortLabel}</span>
+          </button>
+        ))}
       </div>
-    </div>
+    </nav>
   );
 }
 

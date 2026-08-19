@@ -5,6 +5,8 @@ import { createPortal } from "react-dom";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 
+import { useIsMobile } from "@/hooks/use-is-mobile";
+
 import {
   accounts as seedAccounts,
   bankPresets as seedBankPresets,
@@ -1261,6 +1263,7 @@ export function FinanceApp() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const isMobile = useIsMobile();
   const activeView: ViewId =
     pathname === "/transacoes"
       ? "transactions"
@@ -9494,8 +9497,6 @@ export function FinanceApp() {
             </div>
           </header>
 
-          <MobileNavigation activeView={activeView} onNavigate={handleNavigate} />
-
           <main className="pb-24 lg:pb-6">
             {activeView === "home" && renderDashboard()}
             {activeView === "transactions" && renderTransactionsWorkspace()}
@@ -9503,6 +9504,8 @@ export function FinanceApp() {
             {activeView === "reconciliation" && renderReconciliationWorkspace()}
             {activeView === "settings" && renderSettingsWorkspace()}
           </main>
+
+          <MobileNavigation activeView={activeView} onNavigate={handleNavigate} />
         </div>
       </div>
     </div>
@@ -10323,6 +10326,210 @@ export function FinanceApp() {
       };
     });
 
+    function renderFixedGridRowMobile(row: MonthlyGridRow, monthValue: string) {
+      const amount = row.amountByMonth[monthValue] ?? 0;
+      const isCompleted = row.completedMonths.includes(monthValue);
+      const isCardAutoBillRow = row.sourceType === "card_auto_bill";
+      const isPurchaseRow = row.sourceType === "planned_purchase";
+      const cardBillEstimate = isCardAutoBillRow
+        ? cardBillEstimates[getCardBillEstimateKey(row.sourceId, monthValue)]
+        : undefined;
+      const onAmountChange = (value: string) =>
+        isPurchaseRow
+          ? handlePlannedPurchaseAmountChange(row.sourceId, monthValue, value)
+          : handleMonthlyGridAmountChange(row, monthValue, value);
+
+      if (isCardAutoBillRow) {
+        return (
+          <div
+            key={row.id}
+            onClick={() => openCardBillComparison(row.sourceId, monthValue)}
+            className={`rounded-2xl border px-3 py-3 transition ${
+              amount <= 0
+                ? "border-slate-100 bg-slate-50/70 text-slate-300"
+                : isCompleted
+                  ? "border-sky-200 bg-sky-50 text-sky-800"
+                  : "border-slate-200 bg-white text-slate-700"
+            }`}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{row.title}</p>
+                <p className="mt-0.5 text-[11px] uppercase tracking-[0.1em] text-current/60">
+                  {getDisplayCategoryName(row.categoryId, row.categoryName)}
+                </p>
+              </div>
+              <input
+                value={formatMoneyInputValue(amount)}
+                onClick={(event) => event.stopPropagation()}
+                onFocus={(event) => event.stopPropagation()}
+                onChange={(event) => onAmountChange(event.target.value)}
+                inputMode="decimal"
+                placeholder="0"
+                className="w-24 shrink-0 bg-transparent text-right text-sm font-semibold tabular-nums outline-none"
+              />
+            </div>
+            {cardBillEstimate && !cardBillEstimate.isAutoEstimate ? (
+              <div className="mt-2 flex flex-wrap gap-1">
+                <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] text-violet-700">
+                  Manual
+                </span>
+                {cardBillEstimate?.status === "paid" ? (
+                  <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] text-emerald-700">
+                    Pago
+                  </span>
+                ) : null}
+              </div>
+            ) : cardBillEstimate?.status === "paid" ? (
+              <div className="mt-2 flex flex-wrap gap-1">
+                <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] text-emerald-700">
+                  Pago
+                </span>
+              </div>
+            ) : null}
+          </div>
+        );
+      }
+
+      return (
+        <div
+          key={row.id}
+          className={`rounded-2xl border px-3 py-3 ${
+            amount <= 0 ? "border-slate-100 bg-slate-50/70" : "border-slate-200 bg-white"
+          }`}
+        >
+          <div className="flex items-start justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => openMonthlyGridRowModal(row)}
+              className="min-w-0 flex-1 text-left"
+            >
+              <p className="truncate text-sm font-semibold text-slate-900">{row.title}</p>
+              <p className="mt-0.5 truncate text-[11px] uppercase tracking-[0.1em] text-slate-400">
+                {getDisplayCategoryName(row.categoryId, row.categoryName)}
+              </p>
+            </button>
+            {canDeleteMonthlyGridRow(row) ? (
+              <button
+                type="button"
+                onClick={() => requestMonthlyGridDelete(row)}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-rose-50 text-rose-600"
+                aria-label={`Excluir ${row.title}`}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
+
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              value={formatMoneyInputValue(amount)}
+              onChange={(event) => onAmountChange(event.target.value)}
+              inputMode="decimal"
+              placeholder="0"
+              className="field flex-1 text-sm"
+            />
+            {row.sourceType === "fixed" && amount > 0 ? (
+              <button
+                type="button"
+                onClick={() => handleToggleFixedEntryMonth(row.sourceId, monthValue)}
+                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition ${
+                  isCompleted ? "bg-emerald-500 text-white" : "bg-slate-100 text-slate-400"
+                }`}
+                aria-label={isCompleted ? "Desmarcar como pago" : "Marcar como pago"}
+              >
+                <Check className="h-4 w-4" />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => openMonthlyGridCellEditor(row, monthValue)}
+              className="shrink-0 rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700"
+            >
+              Abrir
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    function renderFixedWorkspaceMobile() {
+      return (
+        <div className="mt-4 flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2">
+          {salaryCalendarMonths.map((monthItem) => {
+            const comparison = fixedMonthlyComparison.find((item) => item.monthValue === monthItem.monthValue);
+
+            return (
+              <div
+                key={monthItem.monthValue}
+                className={`w-[86vw] shrink-0 snap-center rounded-[28px] border bg-white p-4 ${
+                  monthItem.monthValue === selectedMonth ? "border-blue-300 ring-2 ring-blue-100" : "border-slate-200"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-base font-semibold text-slate-900">{monthItem.label}</p>
+                  <p
+                    className={`text-sm font-semibold ${
+                      (comparison?.balance ?? 0) >= 0 ? "text-blue-600" : "text-rose-600"
+                    }`}
+                  >
+                    {formatCurrency(comparison?.balance ?? 0)}
+                  </p>
+                </div>
+                <div className="mt-1 flex gap-3 text-xs font-semibold">
+                  <span className="text-emerald-700">+{formatCurrency(comparison?.income ?? 0)}</span>
+                  <span className="text-rose-600">-{formatCurrency(comparison?.expenses ?? 0)}</span>
+                </div>
+
+                <div className="mt-4 space-y-4">
+                  {fixedSections.map(({ section, rows }) => {
+                    if (!rows.length) {
+                      return null;
+                    }
+
+                    const isCollapsed = collapsedFixedSections[section];
+
+                    return (
+                      <div key={section}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCollapsedFixedSections((current) => ({
+                              ...current,
+                              [section]: !current[section],
+                            }))
+                          }
+                          className="flex w-full items-center justify-between gap-2 py-1"
+                        >
+                          <span
+                            className={`text-xs font-semibold uppercase tracking-[0.14em] ${
+                              section === "Ganhos" ? "text-emerald-700" : "text-rose-700"
+                            }`}
+                          >
+                            {fixedSectionDisplayLabels[section]}
+                          </span>
+                          {isCollapsed ? (
+                            <ChevronDown className="h-4 w-4 text-slate-400" />
+                          ) : (
+                            <ChevronUp className="h-4 w-4 text-slate-400" />
+                          )}
+                        </button>
+                        {!isCollapsed ? (
+                          <div className="mt-2 space-y-2">
+                            {rows.map((row) => renderFixedGridRowMobile(row, monthItem.monthValue))}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
     return (
       <div className="space-y-4">
         {workspaceMode === "fixed" ? (
@@ -10390,6 +10597,10 @@ export function FinanceApp() {
                 </div>
               </div>
 
+              {isMobile ? (
+                renderFixedWorkspaceMobile()
+              ) : (
+              <Fragment>
               <div className="mt-4 max-w-full overflow-x-auto pb-2">
                 <div className="w-full min-w-[820px] rounded-2xl border border-slate-200 bg-white px-3 py-3">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-2">
@@ -11150,6 +11361,8 @@ export function FinanceApp() {
                   );
                 })}
               </div>
+              </Fragment>
+              )}
             </Panel>
 
           {renderMonthlyGridDeleteConfirmModal()}
