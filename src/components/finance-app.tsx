@@ -1423,6 +1423,7 @@ export function FinanceApp() {
   const pendingRemoteSnapshotRef = useRef<FinancePersistedState | null>(null);
   const remoteRetryTimeoutRef = useRef<number | null>(null);
   const remoteRetryCountRef = useRef(0);
+  const remoteSaveDebounceRef = useRef<number | null>(null);
   const monthlyGridClickSuppressedUntilRef = useRef(0);
   const referenceMonthDate = monthValueToDate(selectedMonth);
   const deferredSearch = useDeferredValue(search);
@@ -2903,7 +2904,25 @@ export function FinanceApp() {
 
           if (payload.state) {
             const remoteUpdatedAt = payload.updatedAt ?? null;
+            const localUpdatedAt = localCache?.updatedAt ?? null;
+            const localIsNewer =
+              Boolean(localState) &&
+              Boolean(localUpdatedAt) &&
+              (!remoteUpdatedAt || new Date(localUpdatedAt as string).getTime() > new Date(remoteUpdatedAt).getTime());
+
             pendingRemoteSnapshotRef.current = null;
+
+            if (localIsNewer && localState) {
+              // O dispositivo tem uma edicao mais recente que ainda nao foi confirmada no Supabase
+              // (por exemplo, a pagina foi recarregada antes do salvamento remoto terminar).
+              // Mantemos a versao local e deixamos o efeito de salvamento reenviar para o servidor.
+              applyPersistedState(localState);
+              setLastRemoteSavedAt(remoteUpdatedAt);
+              setRemoteSaveStatus("saved");
+              setHasHydratedRemoteState(true);
+              return;
+            }
+
             applyPersistedState(payload.state);
             clearLocalPersistedCache();
             writeLocalPersistedCache(payload.state, remoteUpdatedAt);
@@ -2967,7 +2986,14 @@ export function FinanceApp() {
       return;
     }
 
-    void saveStateToSupabase(snapshot);
+    if (remoteSaveDebounceRef.current) {
+      window.clearTimeout(remoteSaveDebounceRef.current);
+    }
+
+    remoteSaveDebounceRef.current = window.setTimeout(() => {
+      remoteSaveDebounceRef.current = null;
+      void saveStateToSupabase(snapshot);
+    }, 1200);
   }, [
     buildPersistedState,
     hasHydratedRemoteState,
@@ -2982,6 +3008,11 @@ export function FinanceApp() {
     }
 
     function flushCurrentState() {
+      if (remoteSaveDebounceRef.current) {
+        window.clearTimeout(remoteSaveDebounceRef.current);
+        remoteSaveDebounceRef.current = null;
+      }
+
       const snapshot = buildPersistedState();
       writeLocalPersistedCache(snapshot);
       void fetch("/api/app-state", {
