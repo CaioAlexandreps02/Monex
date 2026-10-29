@@ -3,7 +3,10 @@ import { NextResponse } from "next/server";
 import { loadRelationalFinanceState, saveRelationalFinanceState } from "@/lib/monex-relational-state";
 
 const APP_STATE_KEY = "default";
-const SUPABASE_REQUEST_TIMEOUT_MS = 12000;
+// O salvamento relacional faz ~40 requisicoes em sequencia (apaga e reinsere tabela por tabela);
+// com 12s ele estourava no meio e deixava o banco incompleto.
+export const maxDuration = 60;
+const SUPABASE_REQUEST_TIMEOUT_MS = 55000;
 const APP_STATE_SOURCE = process.env.MONEX_APP_STATE_SOURCE ?? "relational";
 
 function getSupabaseConfig() {

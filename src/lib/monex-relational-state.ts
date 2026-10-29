@@ -1232,5 +1232,14 @@ export async function saveRelationalFinanceState(config: SupabaseRestConfig, sta
   await insertRows(config, "monex_reserve_goals", toReserveGoalRows(monthlyPlansByMonth), signal);
   await insertRows(config, "monex_settings", [toSettingsRow(asObject(state.settings))], signal);
 
-  return { updatedAt: new Date().toISOString() };
+  // No modo relacional o GET le updated_at de app_state; sem isso o timestamp remoto nunca avanca.
+  const updatedAt = new Date().toISOString();
+  await fetch(`${config.url}/rest/v1/app_state?key=eq.${OWNER_KEY}`, {
+    method: "PATCH",
+    headers: restHeaders(config, { "Content-Type": "application/json", Prefer: "return=minimal" }),
+    body: JSON.stringify({ updated_at: updatedAt }),
+    signal,
+  });
+
+  return { updatedAt };
 }
