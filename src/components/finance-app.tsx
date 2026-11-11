@@ -687,8 +687,13 @@ function getSuggestedCardStatementMonth(card: Card | undefined, baseDateValue?: 
   return `${statementDate.getFullYear()}-${String(statementDate.getMonth() + 1).padStart(2, "0")}`;
 }
 
+// "Mae" (e futuras pessoas) e um Card marcado com issuer "Pessoa": sem fechamento nem limite.
+function isPersonCard(card: Card | undefined) {
+  return card?.issuer === "Pessoa";
+}
+
 function getCardStatementMonthForTransaction(card: Card | undefined, transaction: Transaction) {
-  if (transaction.sourceBillId) {
+  if (transaction.sourceBillId || isPersonCard(card)) {
     return transaction.date.slice(0, 7);
   }
 
@@ -801,7 +806,7 @@ const contasSubTypeOrder: ContasSubType[] = [
 
 function getContasSubType(row: MonthlyGridRow): ContasSubType {
   if (row.sourceType === "card_auto_bill") {
-    return "Faturas";
+    return row.isPersonCard ? "Dividas e acordos" : "Faturas";
   }
 
   if (row.sourceType === "planned_purchase") {
@@ -3076,7 +3081,7 @@ export function FinanceApp() {
   ]);
 
   const autoCardBills = cards
-    .filter((card) => card.availableMode !== "debit")
+    .filter((card) => card.availableMode !== "debit" && !isPersonCard(card))
     .flatMap((card) => {
       const transactionMonths = transactions
         .filter((transaction) => transaction.cardId === card.id && transaction.cardMode === "credit")
@@ -3476,7 +3481,7 @@ export function FinanceApp() {
 
     for (const cardId of affectedCardIds) {
       const card = cards.find((item) => item.id === cardId);
-      if (!card || card.availableMode === "debit") {
+      if (!card || card.availableMode === "debit" || isPersonCard(card)) {
         continue;
       }
 
@@ -3490,7 +3495,11 @@ export function FinanceApp() {
 
     return null;
   };
-  const cardSummaries = getCardSummaries(cards, transactions, referenceMonthDate).map((card) => {
+  const cardSummaries = getCardSummaries(
+    cards.filter((card) => !isPersonCard(card)),
+    transactions,
+    referenceMonthDate,
+  ).map((card) => {
     const limitSnapshot = getCardAvailableLimit(card.id, selectedMonth);
 
     return {
@@ -7705,7 +7714,25 @@ export function FinanceApp() {
       })
       .filter((item) => item.amount > 0);
 
-    return [...transactionItems, ...billItems, ...plannedPurchaseItems].sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+    // Dividas da pessoa (ex.: emprestimo da Mae) entram na linha dela como mais um item.
+    const personDebtItems: CardStatementGridItem[] = isPersonCard(card)
+      ? activeDebts
+          .filter((debt) => debt.status === "active" && debt.plannedCardId === cardId)
+          .map((debt, index) => ({
+            id: `debt-${debt.id}`,
+            title: debt.name,
+            amount: activeFixedEntries.find((entry) => entry.linkedDebtId === debt.id)?.amountByMonth[statementMonth] ?? 0,
+            support: "Divida",
+            sortKey: `0000-${String(index).padStart(4, "0")}`,
+            sourceType: "bill" as const,
+            sourceId: `debt-${debt.id}`,
+          }))
+          .filter((item) => item.amount > 0)
+      : [];
+
+    return [...personDebtItems, ...transactionItems, ...billItems, ...plannedPurchaseItems].sort((left, right) =>
+      left.sortKey.localeCompare(right.sortKey),
+    );
   }
 
   function updateCreditLinkedBillGroupMonth(
@@ -7929,6 +7956,14 @@ export function FinanceApp() {
       });
     const fixedRows: MonthlyGridRow[] = activeFixedEntries
       .filter((entry) => !(entry.linkedBillGroupId && entry.paymentMethod === "credit_card" && entry.cardId))
+      // Divida de uma pessoa (ex.: Mae) aparece dentro da linha dela, nao separada.
+      .filter(
+        (entry) =>
+          !entry.linkedDebtId ||
+          !isPersonCard(
+            cards.find((card) => card.id === activeDebts.find((debt) => debt.id === entry.linkedDebtId)?.plannedCardId),
+          ),
+      )
       .filter((entry) => {
         if (includeHidden || entry.section === "Ganhos") {
           return true;
@@ -8015,9 +8050,10 @@ export function FinanceApp() {
           section: "Contas" as FixedFlowSection,
           sourceType: "card_auto_bill" as const,
           sourceId: card.id,
-          title: `Fatura ${card.name}`,
-          categoryId: "cat-bills",
-          categoryName: "Fatura do cartao",
+          title: isPersonCard(card) ? card.name : `Fatura ${card.name}`,
+          isPersonCard: isPersonCard(card),
+          categoryId: isPersonCard(card) ? "cat-debt" : "cat-bills",
+          categoryName: isPersonCard(card) ? "A repassar" : "Fatura do cartao",
           paymentMethod: "pix" as PaymentMethod,
           accountId: card.linkedAccountId ?? settings.defaultAccountId,
           cardId: card.id,

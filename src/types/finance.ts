@@ -305,6 +305,8 @@ export interface MonthlyGridRow {
   notes?: string;
   amountByMonth: Record<string, number>;
   completedMonths: string[];
+  // Linha de uma pessoa (ex.: Mae), mostrada em Dividas e acordos em vez de Faturas.
+  isPersonCard?: boolean;
 }
 
 export interface CardBillEstimate {
