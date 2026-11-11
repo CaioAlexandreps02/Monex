@@ -32,6 +32,37 @@ function shouldReadRelationalState() {
   return APP_STATE_SOURCE.toLowerCase() === "relational";
 }
 
+// Salvamento apaga e reinsere tudo; uma aba/aparelho com dados antigos sobrescreveria o banco inteiro.
+// Cada tela envia o updated_at que conhecia; se o banco ja estiver mais novo, o servidor recusa (409).
+const STALE_TOLERANCE_MS = 2000;
+
+async function readRemoteUpdatedAt(config: { url: string; serviceRoleKey: string }) {
+  const response = await fetch(`${config.url}/rest/v1/app_state?select=updated_at&key=eq.${APP_STATE_KEY}&limit=1`, {
+    headers: {
+      apikey: config.serviceRoleKey,
+      Authorization: `Bearer ${config.serviceRoleKey}`,
+    },
+    cache: "no-store",
+    signal: getSupabaseRequestSignal(),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Could not read app_state timestamp: ${response.status}`);
+  }
+
+  const rows = (await response.json()) as Array<{ updated_at?: string | null }>;
+  return rows[0]?.updated_at ?? null;
+}
+
+function isStaleClient(baseUpdatedAt: unknown, remoteUpdatedAt: string | null) {
+  if (!remoteUpdatedAt) {
+    return false;
+  }
+
+  const baseTime = typeof baseUpdatedAt === "string" ? Date.parse(baseUpdatedAt) : Number.NaN;
+  return Number.isNaN(baseTime) || Date.parse(remoteUpdatedAt) - baseTime > STALE_TOLERANCE_MS;
+}
+
 export async function GET() {
   try {
     const config = getSupabaseConfig();
@@ -89,11 +120,19 @@ export async function PUT(request: Request) {
       );
     }
 
-    const body = (await request.json()) as { state?: unknown };
+    const body = (await request.json()) as { state?: unknown; baseUpdatedAt?: string | null };
     if (!body.state) {
       return NextResponse.json({ error: "State payload is required." }, { status: 400 });
     }
     if (shouldReadRelationalState()) {
+      const remoteUpdatedAt = await readRemoteUpdatedAt(config);
+      if (isStaleClient(body.baseUpdatedAt, remoteUpdatedAt)) {
+        return NextResponse.json(
+          { error: "stale_client", details: "O banco tem dados mais novos que esta tela.", updatedAt: remoteUpdatedAt },
+          { status: 409 },
+        );
+      }
+
       const payload = await saveRelationalFinanceState(config, body.state, getSupabaseRequestSignal());
       return NextResponse.json({ ok: true, source: "relational", updatedAt: payload.updatedAt });
     }

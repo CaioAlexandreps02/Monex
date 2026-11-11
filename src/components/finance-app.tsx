@@ -500,6 +500,8 @@ type FinancePersistedState = {
 type FinancePersistedCache = {
   state: Partial<FinancePersistedState>;
   updatedAt: string | null;
+  // updated_at do banco em que este cache se baseou; se o banco mudou depois, o cache esta velho.
+  remoteBase?: string | null;
 };
 
 type RemoteSaveStatus = "loading" | "saved" | "saving" | "error";
@@ -1423,6 +1425,7 @@ export function FinanceApp() {
   const pendingRemoteSnapshotRef = useRef<FinancePersistedState | null>(null);
   const remoteRetryTimeoutRef = useRef<number | null>(null);
   const remoteRetryCountRef = useRef(0);
+  const lastRemoteSavedAtRef = useRef<string | null>(null);
   const remoteSaveDebounceRef = useRef<number | null>(null);
   const monthlyGridClickSuppressedUntilRef = useRef(0);
   const referenceMonthDate = monthValueToDate(selectedMonth);
@@ -2636,6 +2639,7 @@ export function FinanceApp() {
       const nextValue = JSON.stringify({
         state,
         updatedAt,
+        remoteBase: lastRemoteSavedAtRef.current,
       } satisfies FinancePersistedCache);
       const currentValue = window.localStorage.getItem(FINANCE_STORAGE_KEY);
 
@@ -2683,12 +2687,17 @@ export function FinanceApp() {
             "updatedAt" in parsed && typeof parsed.updatedAt === "string"
               ? parsed.updatedAt
               : null,
+          remoteBase:
+            "remoteBase" in parsed && typeof parsed.remoteBase === "string"
+              ? parsed.remoteBase
+              : null,
         };
       }
 
       return {
         state: parsed as Partial<FinancePersistedState>,
         updatedAt: null,
+        remoteBase: null,
       };
     } catch {
       window.localStorage.removeItem(FINANCE_STORAGE_KEY);
@@ -2803,8 +2812,18 @@ export function FinanceApp() {
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ state: snapshot }),
+          body: JSON.stringify({ state: snapshot, baseUpdatedAt: lastRemoteSavedAtRef.current }),
         });
+
+        if (response.status === 409) {
+          // O banco tem dados mais novos que esta tela (outra aba/aparelho salvou). Nao sobrescrever: recarregar.
+          pendingRemoteSnapshotRef.current = null;
+          clearLocalPersistedCache();
+          setRemoteSaveStatus("error");
+          setRemoteSaveError("Esta tela estava desatualizada. Recarregando os dados do banco...");
+          window.location.reload();
+          return;
+        }
 
         if (!response.ok) {
           const errorText = await response.text().catch(() => "");
@@ -2813,6 +2832,7 @@ export function FinanceApp() {
 
         const payload = (await response.json()) as { updatedAt?: string | null };
         const savedAt = payload.updatedAt ?? new Date().toISOString();
+        lastRemoteSavedAtRef.current = savedAt;
         writeLocalPersistedCache(snapshot, savedAt);
         setLastRemoteSavedAt(savedAt);
         setRemoteSaveStatus("saved");
@@ -2846,7 +2866,7 @@ export function FinanceApp() {
         }
       }
     },
-    [writeLocalPersistedCache],
+    [clearLocalPersistedCache, writeLocalPersistedCache],
   );
 
   useEffect(() => {
@@ -2905,12 +2925,21 @@ export function FinanceApp() {
           if (payload.state) {
             const remoteUpdatedAt = payload.updatedAt ?? null;
             const localUpdatedAt = localCache?.updatedAt ?? null;
+            // O cache so vale se foi feito em cima do estado atual do banco; se o banco mudou depois
+            // (outra aba/aparelho salvou), o cache esta velho e reenviá-lo apagaria dados mais novos.
+            const localBase = localCache?.remoteBase ?? null;
+            const localBasedOnCurrentRemote =
+              !remoteUpdatedAt ||
+              (Boolean(localBase) &&
+                Math.abs(new Date(remoteUpdatedAt).getTime() - new Date(localBase as string).getTime()) <= 2000);
             const localIsNewer =
               Boolean(localState) &&
               Boolean(localUpdatedAt) &&
+              localBasedOnCurrentRemote &&
               (!remoteUpdatedAt || new Date(localUpdatedAt as string).getTime() > new Date(remoteUpdatedAt).getTime());
 
             pendingRemoteSnapshotRef.current = null;
+            lastRemoteSavedAtRef.current = remoteUpdatedAt;
 
             if (localIsNewer && localState) {
               // O dispositivo tem uma edicao mais recente que ainda nao foi confirmada no Supabase
@@ -2934,6 +2963,7 @@ export function FinanceApp() {
 
           pendingRemoteSnapshotRef.current = null;
           clearLocalPersistedCache();
+          lastRemoteSavedAtRef.current = payload.updatedAt ?? null;
           setLastRemoteSavedAt(payload.updatedAt ?? null);
           setRemoteSaveStatus("saved");
           setHasHydratedRemoteState(true);
@@ -3020,7 +3050,7 @@ export function FinanceApp() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ state: snapshot }),
+        body: JSON.stringify({ state: snapshot, baseUpdatedAt: lastRemoteSavedAtRef.current }),
         keepalive: true,
       }).catch(() => undefined);
     }
@@ -3631,6 +3661,70 @@ export function FinanceApp() {
 
   const salaryCalendarMonths = buildRelativeMonths(referenceMonthDate);
   const monthlyGridRows = createMonthlyGridRows();
+  // Linha que deixa de aparecer (valores apagados) continua visivel por 1 minuto; so para exibicao, nao entra nos totais.
+  const [lingeringRowExpiry, setLingeringRowExpiry] = useState<Record<string, number>>({});
+  const visibleRowIdsRef = useRef<{ month: string; ids: Set<string> }>({ month: selectedMonth, ids: new Set() });
+  const visibleRowKey = `${selectedMonth}#${monthlyGridRows.map((row) => row.id).join("|")}`;
+
+  useEffect(() => {
+    const separatorIndex = visibleRowKey.indexOf("#");
+    const month = visibleRowKey.slice(0, separatorIndex);
+    const rowIds = visibleRowKey.slice(separatorIndex + 1);
+    const current = new Set(rowIds ? rowIds.split("|") : []);
+    const previous = visibleRowIdsRef.current;
+    visibleRowIdsRef.current = { month, ids: current };
+
+    setLingeringRowExpiry((currentExpiry) => {
+      const now = Date.now();
+      const next: Record<string, number> = {};
+
+      Object.entries(currentExpiry).forEach(([id, expiresAt]) => {
+        if (!current.has(id) && expiresAt > now) {
+          next[id] = expiresAt;
+        }
+      });
+
+      // Trocar de mes muda a regra de exibicao; nesse caso as linhas escondidas nao devem ficar.
+      if (previous.month === month) {
+        previous.ids.forEach((id) => {
+          if (!current.has(id) && !(id in next)) {
+            next[id] = now + 60_000;
+          }
+        });
+      }
+
+      const sameAsBefore =
+        Object.keys(next).length === Object.keys(currentExpiry).length &&
+        Object.keys(next).every((id) => currentExpiry[id] === next[id]);
+      return sameAsBefore ? currentExpiry : next;
+    });
+  }, [visibleRowKey]);
+
+  useEffect(() => {
+    const expiries = Object.values(lingeringRowExpiry);
+    if (!expiries.length) {
+      return;
+    }
+
+    const timer = window.setTimeout(
+      () => {
+        setLingeringRowExpiry((currentExpiry) =>
+          Object.fromEntries(Object.entries(currentExpiry).filter(([, expiresAt]) => expiresAt > Date.now())),
+        );
+      },
+      Math.max(0, Math.min(...expiries) - Date.now()) + 50,
+    );
+
+    return () => window.clearTimeout(timer);
+  }, [lingeringRowExpiry]);
+
+  const lingeringRowIds = new Set(Object.keys(lingeringRowExpiry));
+  const displayGridRows = lingeringRowIds.size
+    ? (() => {
+        const visibleIds = new Set(monthlyGridRows.map((row) => row.id));
+        return createMonthlyGridRows(true).filter((row) => visibleIds.has(row.id) || lingeringRowIds.has(row.id));
+      })()
+    : monthlyGridRows;
   const fixedMonthEntries = monthlyGridRows.filter((entry) => (entry.amountByMonth[selectedMonth] ?? 0) > 0);
   const fixedMonthCompletedCount = fixedMonthEntries.filter((entry) =>
     entry.completedMonths.includes(selectedMonth),
@@ -7823,7 +7917,7 @@ export function FinanceApp() {
     updateCreditLinkedBillGroupMonth(cardId, item.sourceId, statementMonth, nextAmount);
   }
 
-  function createMonthlyGridRows(): MonthlyGridRow[] {
+  function createMonthlyGridRows(includeHidden = false): MonthlyGridRow[] {
     const hasPendingAmountFromSelectedMonth = (entry: FixedFlowEntry) =>
       salaryCalendarMonths.some((monthItem) => {
         const amount = entry.amountByMonth[monthItem.monthValue] ?? 0;
@@ -7836,7 +7930,7 @@ export function FinanceApp() {
     const fixedRows: MonthlyGridRow[] = activeFixedEntries
       .filter((entry) => !(entry.linkedBillGroupId && entry.paymentMethod === "credit_card" && entry.cardId))
       .filter((entry) => {
-        if (entry.section === "Ganhos") {
+        if (includeHidden || entry.section === "Ganhos") {
           return true;
         }
 
@@ -7934,12 +8028,14 @@ export function FinanceApp() {
           completedMonths: [],
         };
       })
-      .filter((row) =>
-        salaryCalendarMonths.some(
-          (monthItem) =>
-            (row.amountByMonth[monthItem.monthValue] ?? 0) > 0 ||
-            getCardBillRealAmount(row.sourceId, monthItem.monthValue) > 0,
-        ),
+      .filter(
+        (row) =>
+          includeHidden ||
+          salaryCalendarMonths.some(
+            (monthItem) =>
+              (row.amountByMonth[monthItem.monthValue] ?? 0) > 0 ||
+              getCardBillRealAmount(row.sourceId, monthItem.monthValue) > 0,
+          ),
       );
 
     const purchaseRows: MonthlyGridRow[] = plannedPurchases
@@ -10314,7 +10410,7 @@ export function FinanceApp() {
     const workspaceMode: "fixed" | "month" = activeView === "home" ? "fixed" : "month";
     const fixedSections = fixedSectionOrder.map((section) => ({
       section,
-      rows: monthlyGridRows.filter((row) => normalizeFixedSection(row.section) === section),
+      rows: displayGridRows.filter((row) => normalizeFixedSection(row.section) === section),
     }));
     const fixedMonthlyComparison = salaryCalendarMonths.map((monthItem) => {
       const income = monthlyGridRows
