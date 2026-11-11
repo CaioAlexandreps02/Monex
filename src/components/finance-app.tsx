@@ -261,6 +261,8 @@ type DraftDebt = {
   status: "active" | "paused" | "settled";
   plannedPaymentMethod: PaymentPlanMethod;
   plannedCardId: string;
+  // "Devo a": id do cartao-pessoa (ex.: person-mae) a quem a divida pertence; vazio = ninguem.
+  owedToId: string;
 };
 
 type DraftDebtPlan = {
@@ -285,6 +287,8 @@ type DraftCommitment = {
   cardMode: CardMode;
   notes: string;
   amountByMonth: Record<string, string>;
+  // "Devo a": id do cartao-pessoa (ex.: person-mae) dono da divida; vazio/ausente = ninguem.
+  owedToId?: string;
 };
 
 type CommitmentConversionKind = "agreement" | "recurring" | "installment";
@@ -594,6 +598,7 @@ const initialDraftDebt: DraftDebt = {
   status: "active",
   plannedPaymentMethod: "pix",
   plannedCardId: "card-nubank",
+  owedToId: "",
 };
 
 const initialDraftDebtPlan: DraftDebtPlan = {
@@ -5259,8 +5264,18 @@ export function FinanceApp() {
       priority: debt.priority,
       status: debt.status,
       plannedPaymentMethod: debt.plannedPaymentMethod ?? "pix",
-      plannedCardId: debt.plannedCardId ?? settings.defaultCardId,
+      plannedCardId: debtOwedToPerson(debt) ? settings.defaultCardId : debt.plannedCardId ?? settings.defaultCardId,
+      owedToId: debtOwedToPerson(debt) ? debt.plannedCardId ?? "" : "",
     };
+  }
+
+  function debtOwedToPerson(debt: Debt) {
+    return isPersonCard(cards.find((card) => card.id === debt.plannedCardId));
+  }
+
+  // Cartao gravado na divida criada/editada pelo "Novo compromisso": a pessoa (Devo a) vence o cartao de pagamento.
+  function getCommitmentDebtCardId() {
+    return draftCommitment.owedToId || (draftCommitment.paymentMethod === "card" ? draftCommitment.cardId : undefined);
   }
 
   function getLinkedDebtEntry(debtId: string) {
@@ -5866,7 +5881,8 @@ export function FinanceApp() {
           installments: String(remainingInstallments),
           startDate: debt.nextDueDate,
           paymentMethod: debt.plannedPaymentMethod ?? "pix",
-          cardId: debt.plannedCardId ?? settings.defaultCardId,
+          cardId: debtOwedToPerson(debt) ? settings.defaultCardId : debt.plannedCardId ?? settings.defaultCardId,
+          owedToId: debtOwedToPerson(debt) ? debt.plannedCardId ?? "" : "",
           cardMode: "credit",
           notes: debt.description ?? "",
         });
@@ -6193,7 +6209,8 @@ export function FinanceApp() {
       priority: draftDebt.priority,
       status: draftDebt.status,
       plannedPaymentMethod: draftDebt.plannedPaymentMethod,
-      plannedCardId: draftDebt.plannedPaymentMethod === "card" ? draftDebt.plannedCardId : undefined,
+      plannedCardId:
+        draftDebt.owedToId || (draftDebt.plannedPaymentMethod === "card" ? draftDebt.plannedCardId : undefined),
       notes: undefined,
     };
 
@@ -6351,7 +6368,7 @@ export function FinanceApp() {
         priority: "Alta",
         status: "active",
         plannedPaymentMethod: draftCommitment.paymentMethod,
-        plannedCardId: draftCommitment.paymentMethod === "card" ? draftCommitment.cardId : undefined,
+        plannedCardId: getCommitmentDebtCardId(),
       };
       const linkedEntry = buildFixedEntryFromDebt(nextDebt);
 
@@ -6461,7 +6478,7 @@ export function FinanceApp() {
         installmentAmount,
         nextDueDate: draftCommitment.startDate,
         plannedPaymentMethod: draftCommitment.paymentMethod,
-        plannedCardId: draftCommitment.paymentMethod === "card" ? draftCommitment.cardId : undefined,
+        plannedCardId: getCommitmentDebtCardId(),
       };
       const linkedEntry = buildFixedEntryFromDebt(nextDebt, existingDebtEntry);
       const activeManualMonths =
@@ -6733,7 +6750,7 @@ export function FinanceApp() {
       priority: "Alta",
       status: "active",
       plannedPaymentMethod: draftCommitment.paymentMethod,
-      plannedCardId: draftCommitment.paymentMethod === "card" ? draftCommitment.cardId : undefined,
+      plannedCardId: getCommitmentDebtCardId(),
     };
     const linkedEntry = buildFixedEntryFromDebt(nextDebt);
 
@@ -6853,7 +6870,7 @@ export function FinanceApp() {
         priority: "Alta",
         status: "active",
         plannedPaymentMethod: draftCommitment.paymentMethod,
-        plannedCardId: draftCommitment.paymentMethod === "card" ? draftCommitment.cardId : undefined,
+        plannedCardId: getCommitmentDebtCardId(),
       };
       const linkedEntry = buildFixedEntryFromDebt(nextDebt);
 
@@ -12922,6 +12939,22 @@ export function FinanceApp() {
                 </FormField>
               </div>
 
+              {draftCommitment.kind === "expense" &&
+              draftCommitment.schedule === "installments" &&
+              !(draftCommitment.paymentMethod === "card" && draftCommitment.cardMode === "credit") &&
+              cards.some((card) => isPersonCard(card)) ? (
+                <FormField label="Devo a">
+                  <CustomSelect
+                    value={draftCommitment.owedToId ?? ""}
+                    onChange={(value) => setDraftCommitment((current) => ({ ...current, owedToId: value }))}
+                    options={[
+                      { value: "", label: "Ninguem" },
+                      ...cards.filter((card) => isPersonCard(card)).map((card) => ({ value: card.id, label: card.name })),
+                    ]}
+                  />
+                </FormField>
+              ) : null}
+
               {isEditingCommitment ? (
                 <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -14057,6 +14090,7 @@ export function FinanceApp() {
                     />
                   </FormField>
                 ) : null}
+                {renderOwedToField()}
                   </>
                 )}
               </div>
@@ -14080,6 +14114,27 @@ export function FinanceApp() {
           </div>
         </div>
       </div>
+    );
+  }
+
+  // Campo "Devo a": so aparece se existir alguma pessoa cadastrada (cartao com issuer "Pessoa").
+  function renderOwedToField() {
+    const people = cards.filter((card) => isPersonCard(card));
+    if (!people.length) {
+      return null;
+    }
+
+    return (
+      <FormField label="Devo a">
+        <CustomSelect
+          value={draftDebt.owedToId}
+          onChange={(val) => setDraftDebt((current) => ({ ...current, owedToId: val }))}
+          options={[
+            { value: "", label: "Ninguem" },
+            ...people.map((person) => ({ value: person.id, label: person.name })),
+          ]}
+        />
+      </FormField>
     );
   }
 
@@ -14155,6 +14210,7 @@ export function FinanceApp() {
                 <CustomSelect value={draftDebt.plannedCardId} onChange={(val) => setDraftDebt((current) => ({ ...current, plannedCardId: val }))} options={cards.map((card) => ({ value: card.id, label: card.name, icon: CreditCard }))} />
               </FormField>
             ) : null}
+            {renderOwedToField()}
             <div className="flex flex-wrap justify-between gap-3">
               <div>
                 {editingDebtId ? (
